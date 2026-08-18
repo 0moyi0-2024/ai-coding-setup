@@ -7,6 +7,7 @@ readonly TEST_SCRIPT_PATH="${TEST_DIR}/set_claude_provider_keys_test.sh"
 readonly SCRIPT_PATH="$(cd -- "${TEST_DIR}/.." && pwd -P)/set_claude_provider_keys.sh"
 readonly MANUAL_PATH="$(cd -- "${TEST_DIR}/.." && pwd -P)/README.md"
 readonly REAL_CODEX_BIN="$(command -v codex || true)"
+readonly REAL_CODEX_PATH="${PATH}"
 
 INSTALLED_TEST_COUNT=0
 INSTALLED_TEMP_DIR=''
@@ -181,6 +182,13 @@ assert_file_mode() {
   assert_eq "${expected}" "$(stat -c '%a' "${file}")" "${message}"
 }
 
+render_codex_test_wrapper() {
+  local codex_bin=$1
+  local runtime_path=$2
+  printf '#!/usr/bin/env bash\nexport PATH=%q\nexec %q "$@"' \
+    "${runtime_path}" "${codex_bin}"
+}
+
 make_fake_codex() {
   local base_models
   base_models=$(jq -cn \
@@ -221,6 +229,27 @@ test_node_platform() {
   esac
   assert_eq "${expected}" "$(node_platform)" "node platform resolution"
   pass "node platform resolution"
+}
+
+test_codex_wrapper_preserves_runtime_path() {
+  local runtime_dir="${TEST_ROOT}/split-codex-runtime"
+  local codex_dir="${runtime_dir}/codex-bin"
+  local node_dir="${runtime_dir}/node-bin"
+  local wrapper="${runtime_dir}/codex-wrapper"
+  mkdir -p "${codex_dir}" "${node_dir}"
+  cat >"${codex_dir}/codex" <<'FAKE_NODE_CODEX'
+#!/usr/bin/env node
+FAKE_NODE_CODEX
+  cat >"${node_dir}/node" <<'FAKE_NODE_RUNTIME'
+#!/usr/bin/env bash
+printf '%s\n' 'codex-cli split-runtime-test'
+FAKE_NODE_RUNTIME
+  chmod 700 "${codex_dir}/codex" "${node_dir}/node"
+  write_executable_file "${wrapper}" \
+    "$(render_codex_test_wrapper "${codex_dir}/codex" "${node_dir}:/usr/bin:/bin")"
+  assert_eq 'codex-cli split-runtime-test' "$(PATH=/usr/bin:/bin "${wrapper}" --version)" \
+    "Codex wrapper preserves the separate Node runtime path"
+  pass "Codex wrapper with separate Node runtime"
 }
 
 test_codex_profiles() {
@@ -595,11 +624,9 @@ test_operation_manual() {
 
 test_codex_install_smoke() {
   [[ -n "${REAL_CODEX_BIN}" ]] || return 0
-  local codex_wrapper output real_codex_bin_dir
+  local codex_wrapper output
   DRY_RUN=0
-  real_codex_bin_dir=$(dirname "${REAL_CODEX_BIN}")
-  codex_wrapper=$(printf '#!/usr/bin/env bash\nexport PATH=%q:/usr/bin:/bin\nexec %q "$@"' \
-    "${real_codex_bin_dir}" "${REAL_CODEX_BIN}")
+  codex_wrapper=$(render_codex_test_wrapper "${REAL_CODEX_BIN}" "${REAL_CODEX_PATH}")
   write_executable_file "${NODE_INSTALL_DIR}/bin/codex" "${codex_wrapper}"
   VOLCANO_MODELS="${VOLCANO_MODEL_CANDIDATES}"
   BAILIAN_MODELS='["glm-5.2","qwen3.7-plus"]'
@@ -799,6 +826,7 @@ require_command jq
 test_agent_layout
 test_operation_manual
 test_node_platform
+test_codex_wrapper_preserves_runtime_path
 test_codex_profiles
 test_codex_model_catalog
 test_gateway_model_parser
