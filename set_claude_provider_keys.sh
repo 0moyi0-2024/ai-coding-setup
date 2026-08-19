@@ -495,8 +495,8 @@ augment_codex_model_catalog() {
      | .models = [
          .models[] |
          .supports_search_tool = false |
-         .apply_patch_tool_type = null |
-         .web_search_tool_type = null |
+         .apply_patch_tool_type = "" |
+         .web_search_tool_type = "" |
          .support_verbosity = false
        ]
      | .models += [
@@ -514,16 +514,16 @@ augment_codex_model_catalog() {
              priority:100,
              additional_speed_tiers:[],
              service_tiers:[],
-             availability_nux:null,
-             upgrade:null,
+             availability_nux:"",
+             upgrade:"",
              base_instructions:"You are Codex, a coding agent.",
              default_reasoning_summary:"none",
              support_verbosity:false,
              truncation_policy:{mode:"tokens",limit:10000},
              supports_parallel_tool_calls:false,
              supports_image_detail_original:false,
-             apply_patch_tool_type:null,
-             web_search_tool_type:null,
+             apply_patch_tool_type:"",
+             web_search_tool_type:"",
              context_window:(if ($slug | startswith("claude-")) then 200000
                              elif ($slug | test("^(deepseek|qwen)")) then 1000000
                              else 128000 end),
