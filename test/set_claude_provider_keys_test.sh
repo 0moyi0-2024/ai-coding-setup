@@ -272,8 +272,12 @@ test_codex_profiles() {
     fail "Volcano profile disables unsupported namespace tools"
   grep -Fq 'web_search = "disabled"' <<<"${volcano}" ||
     fail "Volcano profile disables unsupported web search tools"
-  ! grep -Fq 'multi_agent = false' <<<"${blackai}" ||
-    fail "BlackAI GPT profile preserves native tools"
+  grep -Fq 'multi_agent = false' <<<"${blackai}" ||
+    fail "BlackAI GPT profile disables unsupported namespace tools"
+  grep -Fq 'web_search = "disabled"' <<<"${blackai}" ||
+    fail "BlackAI GPT profile disables unsupported web search tools"
+  grep -Fq 'multi_agent = false' <<<"${claude}" ||
+    fail "BlackAI Claude profile disables unsupported namespace tools"
   pass "Codex profile rendering"
 }
 

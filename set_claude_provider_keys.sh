@@ -492,6 +492,13 @@ augment_codex_model_catalog() {
     --argjson custom "${models}" \
     '($custom | unique) as $custom
      | .models as $existing
+     | .models = [
+         .models[] |
+         .supports_search_tool = false |
+         .apply_patch_tool_type = null |
+         .web_search_tool_type = null |
+         .support_verbosity = false
+       ]
      | .models += [
          $custom[] as $slug
          | select($existing | map(.slug) | index($slug) | not)
@@ -515,6 +522,8 @@ augment_codex_model_catalog() {
              truncation_policy:{mode:"tokens",limit:10000},
              supports_parallel_tool_calls:false,
              supports_image_detail_original:false,
+             apply_patch_tool_type:null,
+             web_search_tool_type:null,
              context_window:(if ($slug | startswith("claude-")) then 200000
                              elif ($slug | test("^(deepseek|qwen)")) then 1000000
                              else 128000 end),
@@ -557,8 +566,6 @@ write_codex_model_catalog() {
 
 codex_profile() {
   local profile=$1 model provider name base_url env_key models note=''
-  local restrict_gateway_tools=0
-  local web_search_setting=''
   case "${profile}" in
     volcano)
       provider=volcano-ai-gateway; name='Volcano AI Gateway'
@@ -566,7 +573,6 @@ codex_profile() {
       env_key=VOLCANO_AI_GATEWAY_API_KEY
       models=${VOLCANO_MODELS}
       model=$(select_profile_model "${models}" deepseek-v4-flash deepseek-v4-pro)
-      restrict_gateway_tools=1
       ;;
     bailian)
       provider=bailian; name='Alibaba Bailian'
@@ -574,7 +580,6 @@ codex_profile() {
       models=${BAILIAN_MODELS}
       model=$(select_profile_model "${models}" qwen3.7-plus glm-5.2)
       note='# This profile requires the upstream gateway to support the Responses API.'
-      restrict_gateway_tools=1
       ;;
     blackai-gpt)
       provider=blackaicoding-gpt; name='BlackAI Coding (GPT)'
@@ -588,23 +593,19 @@ codex_profile() {
       models=${BLACKAI_CLAUDE_MODELS}
       model=$(select_profile_model "${models}" claude-sonnet-4-6 claude-sonnet-5 claude-opus-4-6)
       note='# Some Claude/Grok models may reject Codex web_search tools with HTTP 422.'
-      restrict_gateway_tools=1
       ;;
     *) die "Unknown Codex profile: ${profile}" ;;
   esac
   [[ -n "${model}" ]] || die "No token-authorized models are available for profile ${profile}."
-  ((restrict_gateway_tools == 0)) || web_search_setting='web_search = "disabled"'
   printf '%s\n' '# Managed by set_claude_provider_keys.sh.' "${note}" \
     "model = \"${model}\"" "model_provider = \"${provider}\"" \
     "model_catalog_json = \"$(codex_model_catalog_file "${profile}")\"" \
     'model_reasoning_effort = "high"' 'approval_policy = "never"' \
-    'sandbox_mode = "danger-full-access"' "${web_search_setting}" \
+    'sandbox_mode = "danger-full-access"' 'web_search = "disabled"' \
     '' "[model_providers.${provider}]" \
     "name = \"${name}\"" "base_url = \"${base_url}\"" \
-    "env_key = \"${env_key}\"" 'wire_api = "responses"' "models = ${models}"
-  if ((restrict_gateway_tools)); then
-    printf '%s\n' '' '[features]' 'multi_agent = false'
-  fi
+    "env_key = \"${env_key}\"" 'wire_api = "responses"' "models = ${models}" \
+    '' '[features]' 'multi_agent = false'
 }
 
 profile_model_list() {
