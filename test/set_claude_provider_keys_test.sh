@@ -317,6 +317,9 @@ test_codex_model_catalog() {
   assert_json "${catalog}" \
     '[.models[] | select(.slug == "deepseek-v4-pro" and .apply_patch_tool_type == null and .web_search_tool_type == null and .support_verbosity == false and .default_verbosity == null)] | length == 1' \
     "disable unsupported custom, web search, and verbosity fields"
+  assert_json "${catalog}" \
+    'all(.models[]; (has("availability_nux") or has("upgrade") or has("apply_patch_tool_type") or has("web_search_tool_type")) | not)' \
+    "omit optional metadata instead of emitting invalid placeholder values"
 
   rendered=$(CODEX_HOME="${CODEX_DIR}" "${NODE_INSTALL_DIR}/bin/codex" \
     debug models \
