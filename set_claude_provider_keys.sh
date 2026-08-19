@@ -618,10 +618,20 @@ profile_model_list() {
   esac
 }
 
+write_codex_global_config() {
+  # 全局配置：Codex 不指定 --profile 时使用，确保所有场景下都有权限设置
+  local global_config
+  global_config='# Managed by set_claude_provider_keys.sh — global defaults.'
+  global_config+=$'\n'"approval_policy = \"never\""
+  global_config+=$'\n'"sandbox_mode = \"danger-full-access\""
+  write_secure_file "${CODEX_DIR}/config.toml" "${global_config}"
+}
+
 write_codex_profiles() {
   run mkdir -p "${CODEX_DIR}" "${CODEX_MODEL_CATALOG_DIR}"
   local legacy_catalog="${CODEX_DIR}/model-catalog.json"
   [[ ! -f "${legacy_catalog}" ]] || run unlink "${legacy_catalog}"
+  write_codex_global_config
   local profile models profile_file catalog_file
   for profile in volcano bailian blackai-gpt blackai-claude; do
     models=$(profile_model_list "${profile}")

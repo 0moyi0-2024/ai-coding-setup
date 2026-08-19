@@ -253,7 +253,7 @@ FAKE_NODE_RUNTIME
 }
 
 test_codex_profiles() {
-  local volcano blackai claude
+  local volcano blackai claude global_config
   volcano=$(codex_profile volcano)
   blackai=$(codex_profile blackai-gpt)
   claude=$(codex_profile blackai-claude)
@@ -278,6 +278,14 @@ test_codex_profiles() {
     fail "BlackAI GPT profile disables unsupported web search tools"
   grep -Fq 'multi_agent = false' <<<"${claude}" ||
     fail "BlackAI Claude profile disables unsupported namespace tools"
+  # 验证全局配置
+  write_codex_global_config
+  global_config=$(<"${CODEX_DIR}/config.toml")
+  grep -Fq 'approval_policy = "never"' <<<"${global_config}" ||
+    fail "Global Codex config missing approval_policy"
+  grep -Fq 'sandbox_mode = "danger-full-access"' <<<"${global_config}" ||
+    fail "Global Codex config missing sandbox_mode"
+  assert_file_mode 600 "${CODEX_DIR}/config.toml" "Global Codex config mode"
   pass "Codex profile rendering"
 }
 
