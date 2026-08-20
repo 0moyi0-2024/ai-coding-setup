@@ -83,9 +83,9 @@ if (Test-Path $outputFile) {
     exit 1
 }
 
-# 4. 可选：同时编译清理脚本
+# 4. 可选：同时编译清理脚本和托盘脚本
 Write-Host ""
-Write-Host "[额外] 是否同时编译清理脚本？(y/N)"
+Write-Host "[额外] 是否同时编译清理脚本和托盘脚本？(y/N)"
 $buildCleanup = Read-Host
 if ($buildCleanup -eq "y" -or $buildCleanup -eq "Y") {
     $cleanupFile = Join-Path $ScriptDir "清理DSH.ps1"
@@ -93,6 +93,14 @@ if ($buildCleanup -eq "y" -or $buildCleanup -eq "Y") {
         $cleanupOutput = Join-Path $ScriptDir "清理DSH.exe"
         Invoke-PS2EXE -inputFile $cleanupFile -outputFile $cleanupOutput -title "DSH 清理工具" -description "清理 DeepSeek Harness 安装残留" -company "0moyi0-2024" -product "DSH Cleanup" -version "1.0.0.0" -noConsole $false -runtime "win10" -x64 $true -noOutput $true
         Write-Host "  ✅ 清理脚本已编译: $cleanupOutput" -ForegroundColor Green
+    }
+
+    $trayFile = Join-Path $ScriptDir "DSH-Tray.ps1"
+    if (Test-Path $trayFile) {
+        $trayOutput = Join-Path $ScriptDir "DSH-Tray.exe"
+        Invoke-PS2EXE -inputFile $trayFile -outputFile $trayOutput -title "DSH 托盘管理器" -description "DSH 系统托盘管理（右键菜单启动/停止）" -company "0moyi0-2024" -product "DSH Tray" -version "1.0.0.0" -noConsole $true -runtime "win10" -x64 $true -noOutput $true
+        Write-Host "  ✅ 托盘脚本已编译: $trayOutput" -ForegroundColor Green
+        Write-Host "  ℹ️  双击 DSH-Tray.exe 即可在右下角显示图标" -ForegroundColor Cyan
     }
 }
 
@@ -105,6 +113,7 @@ Write-Host "生成的文件："
 Write-Host "  📄 DSH-一键安装.exe    ← 双击即可运行（无需任何设置）"
 if ($buildCleanup -eq "y" -or $buildCleanup -eq "Y") {
     Write-Host "  📄 清理DSH.exe         ← 双击清理残留"
+    Write-Host "  📄 DSH-Tray.exe        ← 双击右下角托盘图标（像QQ/微信）"
 }
 Write-Host ""
 Write-Host "提示：编译后的 .exe 文件无需安装 PowerShell 即可运行"

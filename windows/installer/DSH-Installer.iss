@@ -46,24 +46,29 @@ Name: "english"; MessagesFile: "Default.isl"
 Source: "DSH-一键安装.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; 清理程序（编译后的 exe）
 Source: "清理DSH.exe"; DestDir: "{app}"; Flags: ignoreversion
+; 托盘管理器（编译后的 exe，像 QQ/微信一样在右下角显示图标）
+Source: "DSH-Tray.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; 源码备份（可选，供开发者查看）
 Source: "install-dsh-wsl.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
-; 启动 Web 快捷方式
+; DSH-Tray 源码备份
+Source: "DSH-Tray.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
+; 启动 Web 快捷方式（传统终端窗口模式）
 Source: "DSH-Web-启动.bat"; DestDir: "{app}"; Flags: ignoreversion
 ; 卸载提示脚本
 Source: "uninstall-notes.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; 开始菜单 → 程序组
+Name: "{group}\DSH 托盘管理器"; Filename: "{app}\DSH-Tray.exe"; WorkingDir: "{app}"; Comment: "像 QQ 一样在右下角显示图标，右键启动/停止"
 Name: "{group}\一键安装 DSH"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Comment: "安装 WSL + DeepSeek Harness"
 Name: "{group}\清理 DSH"; Filename: "{app}\清理DSH.exe"; WorkingDir: "{app}"; Comment: "清理所有 DSH 安装残留"
-Name: "{group}\启动 DSH Web"; Filename: "{app}\DSH-Web-启动.bat"; WorkingDir: "{app}"; Comment: "启动 DeepSeek Harness Web 界面"
+Name: "{group}\启动 DSH Web（终端窗口）"; Filename: "{app}\DSH-Web-启动.bat"; WorkingDir: "{app}"; Comment: "在终端窗口中启动 DeepSeek Harness Web 界面"
 Name: "{group}\查看源码"; Filename: "{app}\source\install-dsh-wsl.ps1"; Comment: "查看安装脚本源码"
 Name: "{group}\查看说明"; Filename: "{app}\uninstall-notes.txt"
 Name: "{group}\卸载 DSH"; Filename: "{uninstallexe}"
 
-; 桌面快捷方式
-Name: "{commondesktop}\DeepSeek Harness (DSH)"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Comment: "安装 WSL + DeepSeek Harness"; Tasks: desktopicon
+; 桌面快捷方式（托盘管理器）
+Name: "{commondesktop}\DeepSeek Harness (DSH)"; Filename: "{app}\DSH-Tray.exe"; WorkingDir: "{app}"; Comment: "DSH 托盘管理器 - 右键启动/停止"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式选项："; Flags: checkedonce
