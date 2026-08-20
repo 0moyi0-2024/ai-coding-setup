@@ -137,11 +137,14 @@ function Invoke-WslSilent {
 function Start-Part1-WSL {
     Write-Step "Part 1: 安装 WSL + Ubuntu 24.04"
 
-    # 1.1 检查管理员权限
+    # 1.1 检查管理员权限（不是管理员则自动提权重启）
     Write-Host "[1.1] 检查管理员权限..."
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
-        throw "请以管理员身份运行此脚本（右键 PowerShell → 以管理员身份运行）"
+        Write-Host "  正在请求管理员权限..." -ForegroundColor Yellow
+        $args = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Step $Step"
+        Start-Process powershell -ArgumentList $args -Verb RunAs -Wait -WorkingDirectory $ScriptDir
+        exit
     }
     Test-OK "管理员权限"
 
