@@ -1,0 +1,17 @@
+DeepSeek Harness (DSH) 卸载说明
+================================
+
+已删除本目录下的 DSH 安装文件。
+
+如需完全清理 WSL 中的环境，请在管理员 PowerShell 中手动执行：
+
+  1. 删除 WSL Ubuntu 发行版（可选）：
+     wsl --unregister Ubuntu-24.04
+
+  2. 删除 DSH 安装目录（在 WSL 内）：
+     wsl -d Ubuntu-24.04 -- rm -rf /home/dsh/dsh
+
+  3. 如需完全卸载 WSL 功能（可选，谨慎）：
+     wsl --uninstall
+
+说明：卸载 DSH 不会影响 Windows 系统中的其他文件。
