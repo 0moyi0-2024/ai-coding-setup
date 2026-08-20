@@ -201,8 +201,8 @@ function Start-Part1-WSL {
         Test-OK "WSL 2 已设为默认"
     }
 
-    # 1.6 安装 Ubuntu 发行版（最终命名为 dsh）
-    Write-Host "[1.6] 安装 Ubuntu（最终 WSL 名称: dsh）..."
+    # 1.6 安装全新的 Ubuntu-24.04 并命名为 dsh
+    Write-Host "[1.6] 安装全新 Ubuntu-24.04（WSL 名称: dsh）..."
 
     # 检查是否已有名为 dsh 的发行版
     $dshExists = wsl -l -q 2>&1 | Select-String "^dsh$"
@@ -214,34 +214,22 @@ function Start-Part1-WSL {
         $WSL_DISTRO = "dsh"
         Test-OK "dsh 已就绪（已设为默认）"
     } else {
-        # 找一个已有的 Ubuntu 做导出源（wsl --export 是纯读操作，不动你的原有系统）
-        $allDistros = wsl -l -q 2>&1
-        $sourceDistro = $null
-        foreach ($c in @("Ubuntu-24.04", "Ubuntu-22.04", "Ubuntu-20.04", "Ubuntu")) {
-            if ($allDistros -match $c) { $sourceDistro = $c; break }
+        # 下载全新 Ubuntu-24.04 rootfs（不依赖 wsl --install，不影响已有系统）
+        Write-Host "  正在下载全新 Ubuntu-24.04 rootfs（约 500MB，不影响你原有系统）..."
+        $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-rootfs.tar.gz"
+        $rootfsFile = Join-Path $ScriptDir "_ubuntu_noble_rootfs.tar.gz"
+        
+        try {
+            Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfsFile -UseBasicParsing
+        } catch {
+            throw "下载 Ubuntu rootfs 失败，请检查网络: $_"
         }
+        Write-Host "  下载完成" -ForegroundColor Green
 
-        if ($sourceDistro) {
-            Write-Host "  从已有 $sourceDistro 导出（不动原有系统）..."
-        } else {
-            $sourceDistro = "Ubuntu-24.04"
-            Write-Host "  正在下载 Ubuntu-24.04（首次约 500MB）..."
-            wsl --install -d $sourceDistro --no-launch 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "Ubuntu 安装失败" }
-        }
-
-        # 导出 → 导入为 dsh（wsl --export 是纯读操作，原系统不受影响）
+        # 导入为 dsh
         Write-Host "  导入为 dsh..."
-        $tempTar = Join-Path $ScriptDir "_wsl_dsh_temp.tar"
-        wsl --export $sourceDistro $tempTar 2>&1 | Out-Null
-        wsl --import dsh C:\WSL\dsh $tempTar 2>&1 | Out-Null
-        Remove-Item $tempTar -Force -ErrorAction SilentlyContinue
-
-        # 如果 sourceDistro 是我们刚下载安装的临时版（不是用户原有的），卸载它
-        $wasUserOwned = $allDistros -match $sourceDistro
-        if (-not $wasUserOwned) {
-            wsl --unregister $sourceDistro 2>&1 | Out-Null
-        }
+        wsl --import dsh C:\WSL\dsh $rootfsFile 2>&1 | Out-Null
+        Remove-Item $rootfsFile -Force -ErrorAction SilentlyContinue
 
         # 创建用户 dsh（密码 123456），设 sudo 权限，设默认用户
         Write-Host "  创建 dsh 用户（密码: 123456）..."
@@ -261,7 +249,7 @@ echo "USER-OK"
         $script:WSL_DISTRO = "dsh"
         $global:WSL_DISTRO = "dsh"
         $WSL_DISTRO = "dsh"
-        Test-OK "WSL 发行版已创建: dsh（从 $sourceDistro 导出，原有系统未修改）"
+        Test-OK "全新 Ubuntu-24.04 已创建: dsh（你原有的 Ubuntu-24.04 完全未动）"
     }
 
     # 1.7 验证 WSL 可用
