@@ -16,6 +16,8 @@
 #    .\install-dsh-wsl.ps1 -Step 3    # 只配置 DSH
 # =============================================================================
 
+#requires -RunAsAdministrator
+
 param(
     [ValidateSet("all", "1", "2", "3")]
     [string]$Step = "all"
@@ -137,27 +139,8 @@ function Invoke-WslSilent {
 function Start-Part1-WSL {
     Write-Step "Part 1: 安装 WSL + Ubuntu 24.04"
 
-    # 1.1 检查管理员权限
-    Write-Host "[1.1] 检查管理员权限..."
-    # 用 net session 检测（最可靠，兼容域环境）
-    $isAdmin = $false
-    try {
-        net session 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { $isAdmin = $true }
-    } catch {}
-    if (-not $isAdmin) {
-        Write-Host "  ❌ 需要管理员权限" -ForegroundColor Red
-        Write-Host ""
-        Write-Host "  请关闭此窗口，然后以管理员身份重新打开 PowerShell：" -ForegroundColor Yellow
-        Write-Host "  1. 按 Win 键 → 输入 PowerShell" -ForegroundColor White
-        Write-Host "  2. 右键 → 以管理员身份运行" -ForegroundColor White
-        Write-Host "  3. 执行: cd '$ScriptDir'" -ForegroundColor White
-        Write-Host "  4. 执行: .\install-dsh-wsl.ps1" -ForegroundColor White
-        Write-Host ""
-        pause
-        exit 1
-    }
-    Test-OK "管理员权限"
+    # 1.1 管理员权限由 #requires -RunAsAdministrator 保证
+    Write-Host "[1.1] 管理员权限 ✅" -ForegroundColor Green
 
     # 1.2 自动检测 Windows 版本并选择适配的发行版
     Write-Host "[1.2] 自动检测 Windows 版本和适配的 WSL 发行版..."
