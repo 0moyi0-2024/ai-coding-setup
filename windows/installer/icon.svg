@@ -1,82 +1,67 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <defs>
-    <!-- 鲸鱼身体渐变 -->
     <linearGradient id="whale" x1="20%" y1="10%" x2="90%" y2="100%">
       <stop offset="0%" stop-color="#1e293b"/>
-      <stop offset="100%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
     </linearGradient>
-    <!-- 科技蓝发光 -->
-    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#38bdf8"/>
-      <stop offset="70%" stop-color="#0284c7"/>
+    <radialGradient id="eye" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#7dd3fc"/>
+      <stop offset="50%" stop-color="#0ea5e9"/>
       <stop offset="100%" stop-color="#0369a1"/>
     </radialGradient>
-    <!-- 柔和背景 -->
-    <radialGradient id="bg" cx="50%" cy="45%" r="55%">
-      <stop offset="0%" stop-color="#0f172a"/>
-      <stop offset="100%" stop-color="#020617"/>
-    </radialGradient>
-    <filter id="blur"><feGaussianBlur stdDeviation="2.5"/></filter>
+    <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
   </defs>
 
-  <!-- 深色背景（无边框无圆环） -->
-  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
-
-  <g transform="translate(128,130)">
-    <!-- 喷水 - 科技蓝光点（简洁） -->
-    <g opacity="0.9">
-      <circle cx="-2" cy="-55" r="2.5" fill="#38bdf8" filter="url(#blur)"/>
-      <circle cx="-8" cy="-60" r="1.8" fill="#7dd3fc" opacity="0.8"/>
-      <circle cx="5" cy="-62" r="1.5" fill="#7dd3fc" opacity="0.7"/>
-      <!-- 水柱线条（更简洁） -->
-      <path d="M-2 -48 C-4 -52 -6 -56 -8 -59" stroke="#38bdf8" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.6"/>
-      <path d="M2 -48 C3 -53 5 -58 5 -61" stroke="#38bdf8" stroke-width="1.2" stroke-linecap="round" fill="none" opacity="0.5"/>
+  <g transform="translate(128,128)">
+    <!-- 喷水 - 科技蓝光点 -->
+    <g>
+      <circle cx="-2" cy="-62" r="2.5" fill="#38bdf8" filter="url(#glow)" opacity="0.95"/>
+      <circle cx="-9" cy="-68" r="1.6" fill="#7dd3fc" opacity="0.8"/>
+      <circle cx="6" cy="-70" r="1.3" fill="#7dd3fc" opacity="0.7"/>
+      <path d="M-2 -54 C-4 -58 -7 -64 -9 -67" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round" fill="none" opacity="0.6"/>
+      <path d="M2 -54 C4 -60 6 -66 6 -69" stroke="#38bdf8" stroke-width="1.1" stroke-linecap="round" fill="none" opacity="0.5"/>
     </g>
 
-    <!-- 鲸鱼身体 - 极简流畅线条 -->
+    <!-- 鲸鱼身体 -->
     <path d="
-      M -78 5
-      C -75 -18, -48 -48, -8 -50
-      C 20 -50, 45 -42, 62 -28
-      C 75 -18, 78 -2, 65 12
-      C 48 25, 20 28, -10 26
-      C -40 23, -65 15, -78 8 Z"
+      M -82 10
+      C -78 -18, -50 -52, -6 -54
+      C 26 -54, 54 -44, 72 -26
+      C 84 -12, 86 6, 70 20
+      C 50 34, 16 36, -16 32
+      C -44 28, -72 18, -82 10 Z"
       fill="url(#whale)"/>
 
-    <!-- 腹部 - 极简高光（小面积，更清爽） -->
+    <!-- 腹部小高光 -->
     <path d="
-      M -62 8
-      C -40 18, -5 22, 28 16
-      C 20 22, -5 26, -30 23
-      C -48 20, -58 15, -62 8 Z"
-      fill="#cbd5e1" opacity="0.5"/>
+      M -66 14
+      C -42 24, -4 28, 34 18
+      C 24 26, -4 30, -32 26
+      C -50 22, -60 18, -66 14 Z"
+      fill="#e2e8f0" opacity="0.3"/>
 
-    <!-- 背鳍 - 锐利三角，干练 -->
-    <path d="M 5 -48 C 12 -62, 24 -65, 26 -50 C 22 -42, 14 -38, 5 -40 Z"
+    <!-- 背鳍 -->
+    <path d="M 6 -52 C 16 -68, 30 -70, 30 -52 C 26 -42, 16 -38, 6 -42 Z"
           fill="#0f172a"/>
 
     <!-- 胸鳍 -->
-    <path d="M -10 10 C -20 20, -32 32, -22 36 C -12 34, -2 22, 8 12 Z"
-          fill="#0f172a"/>
+    <path d="M -10 14 C -22 26, -38 40, -26 44 C -12 42, 2 26, 14 14 Z"
+          fill="#020617"/>
 
-    <!-- 尾鳍 - 简洁双叶 -->
-    <path d="M -78 5 C -90 -3, -102 -12, -108 -22 L -92 -8 M -80 8 C -92 15, -105 22, -110 30 L -95 14"
-          stroke="#0f172a" stroke-width="4" stroke-linecap="round" fill="none"/>
+    <!-- 尾鳍 -->
+    <path d="M -82 10 C -96 0, -110 -12, -118 -24 L -100 -6"
+          stroke="#0f172a" stroke-width="5" stroke-linecap="round" fill="none"/>
+    <path d="M -84 12 C -98 22, -114 30, -120 40 L -102 20"
+          stroke="#0f172a" stroke-width="5" stroke-linecap="round" fill="none"/>
 
-    <!-- 眼睛 - 科技蓝光（点睛） -->
-    <circle cx="38" cy="-28" r="5" fill="url(#glow)"/>
-    <circle cx="40" cy="-30" r="1.8" fill="#e0f2fe"/>
-    <!-- 眼睛光晕 -->
-    <circle cx="38" cy="-28" r="8" fill="#38bdf8" opacity="0.15"/>
+    <!-- 眼睛（发光蓝） -->
+    <circle cx="44" cy="-28" r="9" fill="#38bdf8" opacity="0.12"/>
+    <circle cx="44" cy="-28" r="5.5" fill="url(#eye)"/>
+    <circle cx="46" cy="-30" r="2" fill="#f0f9ff"/>
 
-    <!-- 科技感数据点（极简，不多） -->
-    <circle cx="55" cy="-15" r="1.5" fill="#38bdf8" opacity="0.7"/>
-    <path d="M55 -15 L65 -18" stroke="#38bdf8" stroke-width="1" opacity="0.5"/>
-    <circle cx="58" cy="-8" r="1" fill="#38bdf8" opacity="0.5"/>
+    <!-- 科技小点缀 -->
+    <circle cx="64" cy="-12" r="1.5" fill="#38bdf8" opacity="0.7"/>
+    <path d="M64 -12 L76 -16" stroke="#38bdf8" stroke-width="1" stroke-linecap="round" opacity="0.5"/>
+    <circle cx="68" cy="-4" r="1" fill="#38bdf8" opacity="0.4"/>
   </g>
-
-  <!-- DSH 文字 - 极简无衬线，更小更清爽 -->
-  <text x="128" y="232" text-anchor="middle"
-        font-family="-apple-system, 'Segoe UI', Arial, sans-serif"
-        font-size="22" font-weight="600" fill="#94a3b8" letter-spacing="6">DSH</text>
 </svg>
