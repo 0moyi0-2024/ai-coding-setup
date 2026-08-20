@@ -47,11 +47,14 @@ Source: "一键启动-DSH.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "DSH-Web-启动.bat"; DestDir: "{app}"; Flags: ignoreversion
 ; 卸载提示脚本
 Source: "uninstall-notes.txt"; DestDir: "{app}"; Flags: ignoreversion
+; 清理脚本（安装失败时使用）
+Source: "清理DSH.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; 开始菜单 → 程序组
 Name: "{group}\一键安装 DSH"; Filename: "{app}\一键启动-DSH.bat"; WorkingDir: "{app}"; Comment: "安装 WSL + DeepSeek Harness"
 Name: "{group}\启动 DSH Web"; Filename: "{app}\DSH-Web-启动.bat"; WorkingDir: "{app}"; Comment: "启动 DeepSeek Harness Web 界面"
+Name: "{group}\清理 DSH（安装失败时使用）"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\清理DSH.ps1"""; WorkingDir: "{app}"; Comment: "清理所有 DSH 安装残留"
 Name: "{group}\查看说明"; Filename: "{app}\uninstall-notes.txt"
 Name: "{group}\卸载 DSH"; Filename: "{uninstallexe}"
 
