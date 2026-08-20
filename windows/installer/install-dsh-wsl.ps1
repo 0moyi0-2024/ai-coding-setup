@@ -201,24 +201,25 @@ function Start-Part1-WSL {
         Test-OK "WSL 2 已设为默认"
     }
 
-    # 1.6 安装全新的 Ubuntu-24.04 并命名为 dsh
-    Write-Host "[1.6] 安装全新 Ubuntu-24.04（WSL 名称: dsh）..."
+    # 1.6 安装全新的 Ubuntu 并命名为 Ubuntu-版本-日期
+    Write-Host "[1.6] 安装全新 Ubuntu（不影响你原有系统）..."
 
-    # 检查是否已有名为 dsh 的发行版
-    $dshExists = wsl -l -q 2>&1 | Select-String "^dsh$"
+    # 生成动态名称: Ubuntu-24.04-20260821
+    $ubuntuVer = if ($script:WSL_DISTRO -match "(\d+\.\d+)") { $matches[1] } else { "24.04" }
+    $dateStr = Get-Date -Format "yyyyMMdd"
+    $dshName = "Ubuntu-${ubuntuVer}-${dateStr}"
+
+    # 检查是否已有同名发行版
+    $dshExists = wsl -l -q 2>&1 | Select-String $dshName
     if ($dshExists) {
-        Write-Host "  dsh 已存在，跳过" -ForegroundColor Green
-        wsl --set-default dsh 2>&1 | Out-Null
-        $script:WSL_DISTRO = "dsh"
-        $global:WSL_DISTRO = "dsh"
-        $WSL_DISTRO = "dsh"
-        Test-OK "dsh 已就绪（已设为默认）"
+        Write-Host "  $dshName 已存在，跳过" -ForegroundColor Green
     } else {
-        # 下载全新 Ubuntu-24.04 rootfs（不依赖 wsl --install，不影响已有系统）
-        Write-Host "  正在下载全新 Ubuntu-24.04 rootfs（约 500MB，不影响你原有系统）..."
-        $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-rootfs.tar.gz"
-        $rootfsFile = Join-Path $ScriptDir "_ubuntu_noble_rootfs.tar.gz"
-        
+        # 根据版本选择 rootfs 下载地址
+        $codename = if ($ubuntuVer -eq "24.04") { "noble" } else { "jammy" }
+        $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/${codename}/current/ubuntu-${codename}-wsl-amd64-rootfs.tar.gz"
+        $rootfsFile = Join-Path $ScriptDir "_ubuntu_rootfs.tar.gz"
+
+        Write-Host "  正在下载全新 Ubuntu-${ubuntuVer} rootfs（约 500MB）..."
         try {
             Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfsFile -UseBasicParsing
         } catch {
@@ -226,31 +227,29 @@ function Start-Part1-WSL {
         }
         Write-Host "  下载完成" -ForegroundColor Green
 
-        # 导入为 dsh
-        Write-Host "  导入为 dsh..."
-        wsl --import dsh C:\WSL\dsh $rootfsFile 2>&1 | Out-Null
+        # 导入为 dsh_版本_日期
+        Write-Host "  导入为 $dshName..."
+        wsl --import $dshName "C:\WSL\$dshName" $rootfsFile 2>&1 | Out-Null
         Remove-Item $rootfsFile -Force -ErrorAction SilentlyContinue
 
         # 创建用户 dsh（密码 123456），设 sudo 权限，设默认用户
         Write-Host "  创建 dsh 用户（密码: 123456）..."
-        $createUser = @'
+        @"
 useradd -m -s /bin/bash dsh 2>/dev/null
 echo "dsh:123456" | chpasswd
 usermod -aG sudo dsh 2>/dev/null
 echo -e "[user]\ndefault=dsh" > /etc/wsl.conf
-echo "USER-OK"
-'@
-        $createUser | wsl -d dsh -- bash 2>&1 | Out-Null
-        $userCheck = wsl -d dsh -- bash -c "id dsh 2>&1"
+"@ | wsl -d $dshName -- bash 2>&1 | Out-Null
+        $userCheck = wsl -d $dshName -- bash -c "id dsh 2>&1"
         if ($userCheck -match "uid=") { Write-Host "  dsh 用户已创建" -ForegroundColor Green }
-
-        # 更新变量
-        wsl --set-default dsh 2>&1 | Out-Null
-        $script:WSL_DISTRO = "dsh"
-        $global:WSL_DISTRO = "dsh"
-        $WSL_DISTRO = "dsh"
-        Test-OK "全新 Ubuntu-24.04 已创建: dsh（你原有的 Ubuntu-24.04 完全未动）"
     }
+
+    # 设为默认
+    wsl --set-default $dshName 2>&1 | Out-Null
+    $script:WSL_DISTRO = $dshName
+    $global:WSL_DISTRO = $dshName
+    $WSL_DISTRO = $dshName
+    Test-OK "WSL 发行版已创建: $dshName（你原有的 Ubuntu-24.04 完全未动）"
 
     # 1.7 验证 WSL 可用
     Write-Host "[1.7] 验证 WSL 可用性..."

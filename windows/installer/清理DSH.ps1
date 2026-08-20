@@ -21,12 +21,12 @@ $DSH_HOME     = $global:DSH_HOME
 $AGENT_DIR    = "/agent"           # set_claude_provider_keys.sh 的安装目录
 $DesktopPath  = [Environment]::GetFolderPath("Desktop")
 
-# 自动检测 WSL 默认发行版
+# 自动检测 DSH 安装的 WSL 发行版（命名格式: Ubuntu-24.04-20260821）
 try {
-    $defaultDistro = wsl -l -q 2>&1 | Where-Object { $_ -match "Ubuntu" } | Select-Object -First 1
-    if (-not $defaultDistro) { $defaultDistro = "Ubuntu" }
+    $defaultDistro = wsl -l -q 2>&1 | Where-Object { $_ -match "^Ubuntu-\d+\.\d+-\d{8}$" } | Select-Object -First 1
+    if (-not $defaultDistro) { $defaultDistro = "dsh" }
 } catch {
-    $defaultDistro = "Ubuntu"
+    $defaultDistro = "dsh"
 }
 $WSL_DISTRO = $defaultDistro.Trim()
 
