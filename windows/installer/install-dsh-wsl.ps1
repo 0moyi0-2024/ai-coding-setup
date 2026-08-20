@@ -138,11 +138,32 @@ function Test-FAIL {
 function Invoke-WslSilent {
     param(
         [Parameter(ValueFromPipeline=$true)]
-        [string]$Command
+        [string]$Command,
+        [int]$TimeoutMs = 600000  # 默认10分钟超时
     )
     process {
-        $result = wsl -d $WSL_DISTRO -- bash -c $Command 2>&1
-        return $result
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "wsl.exe"
+        $psi.Arguments = "-d $WSL_DISTRO -- bash -c `"$Command`""
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        $psi.CreateNoWindow = $true
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+
+        $p = [System.Diagnostics.Process]::Start($psi)
+        $outTask = $p.StandardOutput.ReadToEndAsync()
+        $errTask = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit($TimeoutMs)) {
+            try { $p.Kill() } catch {}
+            $out = $outTask.Result
+            $err = $errTask.Result
+            return "${out}`n[TIMEOUT after ${TimeoutMs}ms]`n${err}"
+        }
+        $out = $outTask.Result
+        $err = $errTask.Result
+        try { $p.Dispose() } catch {}
+        return "${out}`n${err}"
     }
 }
 
@@ -185,13 +206,19 @@ function Start-Part1-WSL {
         # 1.4 启用 WSL 功能
         Write-Host "[1.4] 启用 WSL 功能..."
         Write-Host "  正在启用 VirtualMachinePlatform 和 WSL..."
+        $dismOk = $true
         dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  VirtualMachinePlatform 启用失败 (exit code: $LASTEXITCODE)" -ForegroundColor Red
+            Write-Host "  ❌ VirtualMachinePlatform 启用失败 (exit: $LASTEXITCODE)" -ForegroundColor Red
+            $dismOk = $false
         }
         dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  WSL 功能启用失败 (exit code: $LASTEXITCODE)" -ForegroundColor Red
+            Write-Host "  ❌ WSL 功能启用失败 (exit: $LASTEXITCODE)" -ForegroundColor Red
+            $dismOk = $false
+        }
+        if (-not $dismOk) {
+            throw "启用 WSL 功能失败，请以管理员身份运行 PowerShell 后重试"
         }
         Write-Host "  WSL 功能已启用" -ForegroundColor Green
 
@@ -354,13 +381,16 @@ function Start-Part1-WSL {
         # 创建用户 dsh（密码 123456），设 sudo 权限，设默认用户，配置免密码sudo
         Write-Host "  创建 dsh 用户（密码: 123456）..."
         @"
-useradd -m -s /bin/bash dsh 2>/dev/null
+#!/bin/bash
+set -e
+useradd -m -s /bin/bash dsh 2>/dev/null || true
 echo "dsh:123456" | chpasswd
-usermod -aG sudo dsh 2>/dev/null
+usermod -aG sudo dsh
 echo "dsh ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/dsh
 chmod 440 /etc/sudoers.d/dsh
 echo "[user]" > /etc/wsl.conf
 echo "default=dsh" >> /etc/wsl.conf
+echo USER-SETUP-OK
 "@ | wsl -d $dshName -- bash 2>&1 | Out-Null
 
         # 重启 WSL 让 wsl.conf 的默认用户生效
@@ -394,6 +424,7 @@ echo "default=dsh" >> /etc/wsl.conf
     # 1.7 验证 WSL 可用
     Write-Host "[1.7] 验证 WSL 可用性..."
     try {
+        Start-Sleep -Seconds 2
         $testResult = wsl -d $WSL_DISTRO -- echo "WSL-OK" 2>&1
         if ($testResult -match "WSL-OK") {
             Test-OK "WSL 可正常执行命令"
@@ -603,17 +634,23 @@ function Start-Part3-Config {
         }
     }
 
-    # 写入 .env 文件（base64 编码，避免引号注入）
+    # 写入 .env 文件（base64 编码，避免引号注入；写入所有已配置的 Provider）
     $tokens = Get-DshTokens
-    if ($tokens.ContainsKey("DEEPSEEK_API_KEY") -and $tokens["DEEPSEEK_API_KEY"]) {
-        $val = ConvertTo-PlainText $tokens["DEEPSEEK_API_KEY"]
-        $envContent = "DEEPSEEK_API_KEY=$val"
+    $envLines = @()
+    foreach ($p in $DshProviders) {
+        $k = $p.EnvKey
+        if ($tokens.ContainsKey($k) -and $tokens[$k]) {
+            $val = ConvertTo-PlainText $tokens[$k]
+            $envLines += "$k=$val"
+        }
+    }
+    if ($envLines.Count -gt 0) {
+        $envContent = $envLines -join "`n"
         $envB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($envContent))
         Invoke-WslSilent "echo '$envB64' | base64 -d > '$DSH_HOME/.env' && chmod 600 '$DSH_HOME/.env' && echo ENV-OK"
-        # 写入后立即在内存中清除
-        $val = $null
         $envContent = $null
         $envB64 = $null
+        $envLines = $null
     }
 
     # 3.2 配置 DSH 环境变量
