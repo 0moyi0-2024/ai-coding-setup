@@ -721,6 +721,27 @@ test_dry_run_is_non_destructive() {
   pass "dry-run is non-destructive"
 }
 
+test_configuration_dependency_install() {
+  (
+    jq_installed=0
+    command_exists() {
+      if [[ "$1" == jq ]]; then
+        ((jq_installed))
+      else
+        command command -v "$1" >/dev/null 2>&1
+      fi
+    }
+    apt-get() {
+      if [[ "$1" == install ]]; then
+        jq_installed=1
+      fi
+    }
+    ensure_configuration_dependencies
+    ((jq_installed))
+  ) || fail "install missing configuration dependency"
+  pass "install missing configuration dependency"
+}
+
 test_node_version_guard() {
   local old_node="${TEST_ROOT}/old-node"
   cat >"${old_node}" <<'OLD_NODE'
@@ -862,6 +883,7 @@ test_agent_file_collision
 test_agent_path_validation
 test_argument_parsing
 test_dry_run_is_non_destructive
+test_configuration_dependency_install
 test_node_version_guard
 test_cli_install_command
 test_better_sqlite_rebuild

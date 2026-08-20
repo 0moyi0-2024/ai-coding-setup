@@ -52,6 +52,9 @@ bash ./set_claude_provider_keys.sh
 安装过程可能需要访问 Node.js、npm 和相应模型网关。缺少 `libatomic.so.1` 时，
 脚本可能通过容器的 apt、dnf 或 yum 安装这个系统依赖。
 
+配置网关需要 `jq`、`curl` 和 `openssl`。如果这些命令缺失，脚本会尝试通过容器的
+apt、dnf 或 yum 自动安装；没有可用包管理器时，请先手动安装后再运行脚本。
+
 ## 修改或上库前运行开发测试
 
 运行配套测试脚本：

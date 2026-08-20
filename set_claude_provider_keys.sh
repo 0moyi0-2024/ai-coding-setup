@@ -82,6 +82,31 @@ require_command() {
   command_exists "$1" || die "Missing required command: $1"
 }
 
+ensure_configuration_dependencies() {
+  local -a missing=()
+  command_exists jq || missing+=(jq)
+  command_exists curl || missing+=(curl)
+  command_exists openssl || missing+=(openssl)
+  ((${#missing[@]} == 0)) && return 0
+
+  log "Installing missing configuration dependencies: ${missing[*]}"
+  if command_exists apt-get; then
+    apt-get update
+    apt-get install -y "${missing[@]}"
+  elif command_exists dnf; then
+    dnf install -y "${missing[@]}"
+  elif command_exists yum; then
+    yum install -y "${missing[@]}"
+  else
+    die "Missing required command(s): ${missing[*]}. Install them manually."
+  fi
+
+  local command
+  for command in "${missing[@]}"; do
+    require_command "${command}"
+  done
+}
+
 write_secure_file() {
   local file=$1
   local content=$2
@@ -1100,9 +1125,7 @@ parse_args() {
 
 require_configuration_dependencies() {
   if ((CONFIGURE_GATEWAYS && !DRY_RUN)); then
-    require_command jq
-    require_command curl
-    require_command openssl
+    ensure_configuration_dependencies
   fi
 }
 
