@@ -34,6 +34,7 @@ $script:notifyIcon = $null
 $script:contextMenu = $null
 $script:terminalProcess = $null   # 日志终端窗口进程
 $script:browserProcess = $null    # 浏览器窗口进程
+$script:lastBrowserState = $false # 上次浏览器状态（用于检测手动变化）
 $DSH_LOG_FILE = "/tmp/dsh.log"    # DSH 日志文件路径
 
 # ===== WSL 辅助函数 =====
@@ -208,12 +209,41 @@ function Close-Browser {
 }
 
 function Test-IsBrowserOpen {
-    <# 检测浏览器是否打开 #>
+    <# 检测浏览器是否打开（跟踪进程 + 端口连接检测） #>
+
+    # 1. 跟踪的进程是否还活着
     if ($script:browserProcess -and -not $script:browserProcess.HasExited) {
         return $true
     }
     $script:browserProcess = $null
+
+    # 2. 检测是否有浏览器正连接到 DSH 端口（用户手动输入地址的情况）
+    try {
+        $connections = Get-NetTCPConnection -LocalPort $DSH_PORT -State Established -ErrorAction SilentlyContinue
+        if ($connections) {
+            foreach ($conn in $connections) {
+                $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+                if ($proc -and $proc.ProcessName -match "chrome|msedge|firefox|brave|opera|iexplore") {
+                    return $true
+                }
+            }
+        }
+    } catch {
+        # Get-NetTCPConnection 不可用时回退到 netstat
+        $netstat = netstat -ano 2>$null | Select-String ":$DSH_PORT" | Select-String "ESTABLISHED"
+        if ($netstat) { return $true }
+    }
+
     return $false
+}
+
+function Test-IsBrowserStateChanged {
+    <# 检查浏览器状态是否变化，变化则刷新菜单 #>
+    $currentState = Test-IsBrowserOpen
+    if ($currentState -ne $script:lastBrowserState) {
+        $script:lastBrowserState = $currentState
+        Update-Menu
+    }
 }
 
 # ===== 终端显示/隐藏 =====
@@ -357,6 +387,11 @@ function Show-Tray {
     Update-Menu
     $script:notifyIcon.ContextMenuStrip = $script:contextMenu
 
+    # 每次右键菜单打开前，刷新一次状态（保证按钮状态最新）
+    $script:contextMenu.Add_Opening({
+        Update-Menu
+    })
+
     $script:notifyIcon.Add_DoubleClick({
         if (Test-IsBrowserOpen) {
             Close-Browser
@@ -377,6 +412,12 @@ function Show-Tray {
     })
 
     $script:notifyIcon.ShowBalloonTip(3000, "DSH 托盘管理器", "右键启动服务 | 配置 Token | 双击打开浏览器", [System.Windows.Forms.ToolTipIcon]::Info)
+
+    # 定时器：每 3 秒检测浏览器状态变化（用户手动打开/关闭浏览器时自动切换菜单）
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 3000
+    $timer.Add_Tick({ Test-IsBrowserStateChanged })
+    $timer.Start()
 
     [System.Windows.Forms.Application]::Run()
 }
