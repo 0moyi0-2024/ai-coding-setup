@@ -162,6 +162,9 @@ function Start-Part1-WSL {
         $build = [int]$os.BuildNumber
         Write-Host "  手动指定发行版: $script:WSL_DISTRO (Build $build)"
     }
+    # 同步到全局变量，供其他函数使用
+    $global:WSL_DISTRO = $script:WSL_DISTRO
+    $WSL_DISTRO = $script:WSL_DISTRO
     Test-OK "WSL 发行版已确定: $script:WSL_DISTRO"
 
     # 1.3 检查是否已安装 WSL
@@ -198,18 +201,21 @@ function Start-Part1-WSL {
         }
 
         # 1.6 安装 Ubuntu 发行版
-        Write-Host "[1.6] 安装 Ubuntu 24.04..."
-        $existingDistro = wsl -l -q 2>&1 | Select-String $WSL_DISTRO
+        Write-Host "[1.6] 安装 $script:WSL_DISTRO..."
+        $existingDistro = wsl -l -q 2>&1 | Select-String $script:WSL_DISTRO
         if ($existingDistro) {
-            Write-Host "  $WSL_DISTRO 已存在，跳过安装"
-            Test-OK "$WSL_DISTRO 已存在"
+            Write-Host "  $script:WSL_DISTRO 已存在，跳过安装"
+            wsl --set-default $script:WSL_DISTRO 2>&1 | Out-Null
+            Test-OK "$script:WSL_DISTRO 已存在（已设为默认）"
         } else {
-            Write-Host "  正在下载并安装 $WSL_DISTRO（首次约 500MB，需几分钟）..."
-            wsl --install -d $WSL_DISTRO --no-launch 2>&1
+            Write-Host "  正在下载并安装 $script:WSL_DISTRO（首次约 500MB，需几分钟）..."
+            wsl --install -d $script:WSL_DISTRO --no-launch 2>&1
             if ($LASTEXITCODE -ne 0) {
                 throw "Ubuntu 安装失败"
             }
-            Test-OK "$WSL_DISTRO 安装完成"
+            # 设为默认发行版（后续 wsl 命令默认用它）
+            wsl --set-default $script:WSL_DISTRO 2>&1 | Out-Null
+            Test-OK "$script:WSL_DISTRO 安装完成（已设为默认 WSL 发行版）"
         }
     }
 

@@ -13,12 +13,12 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic
 
 # ===== 配置 =====
-$WSL_DISTRO   = "Ubuntu-24.04"
 $DSH_HOME     = "/home/dsh/dsh"
 $DSH_PORT     = 3080
 $DSH_PROFILE  = "web"
 $DSH_LOG_FILE = "/tmp/dsh.log"
 $ENV_FILE     = "$DSH_HOME/.env"
+$WSL_DISTRO   = ""  # 空 = 使用 WSL 默认发行版（安装脚本会设置默认，自动适配 Ubuntu-22.04/24.04）
 
 # 加载托盘图标（同目录下 icon.ico，没有则用系统图标）
 $ICON_FILE = Join-Path $PSScriptRoot "icon.ico"
@@ -49,7 +49,12 @@ function Invoke-WslHidden {
     param([string]$Command)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "wsl.exe"
-    $psi.Arguments = "-d $WSL_DISTRO -- bash -c `"$Command`""
+    if ($WSL_DISTRO -ne "") {
+        $psi.Arguments = "-d $WSL_DISTRO -- bash -c `"$Command`""
+    } else {
+        # 空 distro = 使用 WSL 默认发行版（安装脚本已设置为新安装的 Ubuntu）
+        $psi.Arguments = "-- bash -c `"$Command`""
+    }
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
     $psi.CreateNoWindow = $true
     $psi.UseShellExecute = $false
@@ -286,7 +291,11 @@ function Show-Terminal {
     # 打开新终端窗口，tail -f 实时日志，并设置窗口标题为黑鲸鱼
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "wsl.exe"
-    $psi.Arguments = "-d $WSL_DISTRO -- bash -c 'echo -ne \"\033]0;🐋 DSH 实时日志 v0.0.1\007\"; echo \"=== 🐋 DSH 实时日志 v0.0.1 (Ctrl+C 关闭) ===\"; echo \"\"; tail -f $DSH_LOG_FILE'"
+    if ($WSL_DISTRO -ne "") {
+        $psi.Arguments = "-d $WSL_DISTRO -- bash -c 'echo -ne \"\033]0;🐋 DSH 实时日志 v0.0.1\007\"; echo \"=== 🐋 DSH 实时日志 v0.0.1 (Ctrl+C 关闭) ===\"; echo \"\"; tail -f $DSH_LOG_FILE'"
+    } else {
+        $psi.Arguments = "-- bash -c 'echo -ne \"\033]0;🐋 DSH 实时日志 v0.0.1\007\"; echo \"=== 🐋 DSH 实时日志 v0.0.1 (Ctrl+C 关闭) ===\"; echo \"\"; tail -f $DSH_LOG_FILE'"
+    }
     $psi.UseShellExecute = $true   # 必须用 ShellExecute 才能打开独立窗口
     $script:terminalProcess = [System.Diagnostics.Process]::Start($psi)
 
