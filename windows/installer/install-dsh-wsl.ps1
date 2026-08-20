@@ -159,56 +159,66 @@ function Start-Part1-WSL {
     $WSL_DISTRO = $script:WSL_DISTRO
     Test-OK "WSL 发行版已确定: $script:WSL_DISTRO"
 
-    # 1.3 检查是否已安装 WSL
+    # 1.3 检查 WSL 功能是否启用
     Write-Host "[1.3] 检查 WSL 状态..."
-    $wslInstalled = $false
+    $wslReady = $false
     try {
-        $wslVersion = wsl --version 2>&1
+        wsl --version 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
-            $wslInstalled = $true
-            Write-Host "  WSL 已安装: $($wslVersion -join ' ')"
-            Test-OK "WSL 已安装"
+            $wslReady = $true
+            Write-Host "  WSL 功能已启用" -ForegroundColor Green
         }
-    } catch {
-        Write-Host "  WSL 未安装，开始安装..."
-    }
+    } catch {}
 
-    if (-not $wslInstalled) {
+    if (-not $wslReady) {
         # 1.4 启用 WSL 功能
         Write-Host "[1.4] 启用 WSL 功能..."
         Write-Host "  正在启用 VirtualMachinePlatform 和 WSL..."
         dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart | Out-Null
         dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart | Out-Null
-        Test-OK "WSL 功能已启用"
+        Write-Host "  ✅ WSL 功能已启用" -ForegroundColor Green
 
-        # 1.5 设置 WSL 默认版本为 2
-        Write-Host "[1.5] 设置 WSL 2 为默认版本..."
-        wsl --set-default-version 2 2>&1 | Out-Null
+        Write-Host ""
+        Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Yellow
+        Write-Host "  ║  ⚠️  需要重启电脑，WSL 才能使用         ║" -ForegroundColor Yellow
+        Write-Host "  ║                                            ║" -ForegroundColor Yellow
+        Write-Host "  ║  重启后重新运行此脚本即可从断点继续      ║" -ForegroundColor Yellow
+        Write-Host "  ║  .\install-dsh-wsl.ps1                   ║" -ForegroundColor Yellow
+        Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Yellow
+        Write-Host ""
+        $restartNow = Read-Host "  是否现在重启？(Y/n)"
+        if ($restartNow -ne "n" -and $restartNow -ne "N") {
+            Restart-Computer -Force
+        }
+        exit 0
+    }
+
+    # 1.5 设置 WSL 2 为默认版本
+    Write-Host "[1.5] 设置 WSL 2 为默认版本..."
+    wsl --set-default-version 2 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  提示: 如需 WSL 2，请先安装 WSL 内核更新包:" -ForegroundColor Yellow
+        Write-Host "  https://aka.ms/wsl2kernel" -ForegroundColor Gray
+        Write-Host "  （WSL 1 也可以继续安装，但性能较差）" -ForegroundColor Yellow
+    } else {
+        Test-OK "WSL 2 已设为默认"
+    }
+
+    # 1.6 安装 Ubuntu 发行版
+    Write-Host "[1.6] 安装 $script:WSL_DISTRO..."
+    $existingDistro = wsl -l -q 2>&1 | Select-String $script:WSL_DISTRO
+    if ($existingDistro) {
+        Write-Host "  $script:WSL_DISTRO 已存在，跳过安装" -ForegroundColor Green
+        wsl --set-default $script:WSL_DISTRO 2>&1 | Out-Null
+        Test-OK "$script:WSL_DISTRO 已存在（已设为默认）"
+    } else {
+        Write-Host "  正在下载并安装 $script:WSL_DISTRO（首次约 500MB，需几分钟）..."
+        wsl --install -d $script:WSL_DISTRO --no-launch 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  提示: 如需 WSL 2，请先安装 WSL 内核更新包:"
-            Write-Host "  https://aka.ms/wsl2kernel"
-            Test-FAIL "WSL 2 设置失败（可能需要重启后安装内核更新包）"
-        } else {
-            Test-OK "WSL 2 已设为默认"
+            throw "Ubuntu 安装失败，请检查网络后重试"
         }
-
-        # 1.6 安装 Ubuntu 发行版
-        Write-Host "[1.6] 安装 $script:WSL_DISTRO..."
-        $existingDistro = wsl -l -q 2>&1 | Select-String $script:WSL_DISTRO
-        if ($existingDistro) {
-            Write-Host "  $script:WSL_DISTRO 已存在，跳过安装"
-            wsl --set-default $script:WSL_DISTRO 2>&1 | Out-Null
-            Test-OK "$script:WSL_DISTRO 已存在（已设为默认）"
-        } else {
-            Write-Host "  正在下载并安装 $script:WSL_DISTRO（首次约 500MB，需几分钟）..."
-            wsl --install -d $script:WSL_DISTRO --no-launch 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                throw "Ubuntu 安装失败"
-            }
-            # 设为默认发行版（后续 wsl 命令默认用它）
-            wsl --set-default $script:WSL_DISTRO 2>&1 | Out-Null
-            Test-OK "$script:WSL_DISTRO 安装完成（已设为默认 WSL 发行版）"
-        }
+        wsl --set-default $script:WSL_DISTRO 2>&1 | Out-Null
+        Test-OK "$script:WSL_DISTRO 安装完成（已设为默认 WSL 发行版）"
     }
 
     # 1.7 验证 WSL 可用
