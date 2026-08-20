@@ -396,34 +396,43 @@ pnpm dsh --help 2>&1 | head -5
 function Start-Part3-Config {
     Write-Step "Part 3: 配置 DSH"
 
-    # 3.1 检查 API Key
-    Write-Host "[3.1] 配置 DeepSeek API Key..."
-    $envFile = "$DSH_HOME/.env"
-    $keyCheck = Invoke-WslSilent "cat $envFile 2>/dev/null | grep DEEPSEEK_API_KEY || echo 'NOT-FOUND'"
+    # 3.1 配置 DeepSeek API Key（DPAPI 加密存储）
+    Write-Host "[3.1] 配置 DeepSeek API Key（Windows DPAPI 加密存储）..."
 
-    if ($keyCheck -match "NOT-FOUND") {
-        Write-Host "  请输入你的 DeepSeek API Key（输入时不回显）:"
-        Write-Host "  （可在 https://platform.deepseek.com/api_keys 获取）"
-        $apiKey = Read-Host -AsSecureString
-        $apiKeyPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($apiKey))
-        
-        if ($apiKeyPlain) {
-            $setKey = @"
-#!/bin/bash
-set -e
-cd "$DSH_HOME"
-echo "DEEPSEEK_API_KEY=$apiKeyPlain" > "$envFile"
-chmod 600 "$envFile"
-echo "API Key 已保存到 $envFile"
-"@
-            Invoke-WslSilent $setKey
-            Test-OK "API Key 已配置"
-        } else {
-            Write-Host "  跳过 API Key 配置（未输入）" -ForegroundColor Yellow
-            Test-FAIL "API Key 未配置（跳过，可后续手动设置）"
-        }
+    # 加载加密模块
+    . "$ScriptDir\dsh-crypto.ps1"
+
+    $existing = Get-DshTokens
+    if ($existing.ContainsKey("DEEPSEEK_API_KEY") -and $existing["DEEPSEEK_API_KEY"]) {
+        Test-OK "DeepSeek API Key 已加密保存"
     } else {
-        Test-OK "API Key 已存在"
+        Write-Host "  请输入你的 DeepSeek API Key（输入时不回显）:" -ForegroundColor Cyan
+        Write-Host "  （可在 https://platform.deepseek.com/api_keys 获取）" -ForegroundColor Gray
+        $apiKey = Read-Host -AsSecureString
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($apiKey)
+        $apiKeyPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) | Out-Null
+
+        if ($apiKeyPlain) {
+            Set-DshToken -Name "DEEPSEEK_API_KEY" -Value $apiKey
+            Test-OK "API Key 已通过 DPAPI 加密保存到 %APPDATA%\DSH\tokens.enc"
+        } else {
+            Write-Host "  跳过 API Key 配置（未输入，可安装后通过托盘右键配置）" -ForegroundColor Yellow
+            Test-FAIL "API Key 未配置（可安装后在托盘 → Token配置 里设置）"
+        }
+    }
+
+    # 写入 .env 文件（一次性，给验证脚本用，后面由托盘启动时动态写入/删除）
+    $tokens = Get-DshTokens
+    if ($tokens.ContainsKey("DEEPSEEK_API_KEY") -and $tokens["DEEPSEEK_API_KEY"]) {
+        $val = ConvertTo-PlainText $tokens["DEEPSEEK_API_KEY"]
+        $envInit = @"
+echo 'DEEPSEEK_API_KEY=$val' > "$DSH_HOME/.env"
+chmod 600 "$DSH_HOME/.env"
+"@
+        Invoke-WslSilent $envInit
+        # 写入后立即在内存中清除
+        $val = $null
     }
 
     # 3.2 配置 DSH 环境变量
@@ -455,6 +464,8 @@ echo "环境变量已写入 ~/.bashrc"
 #!/bin/bash
 # 🐋 DSH Web 启动脚本 v0.0.1
 # 用法: bash start-dsh.sh
+# 注意：Token 由 Windows 侧托盘（DSH-Tray.exe）通过加密存储管理，
+#       启动时由托盘临时写入 .env，停止时删除。
 
 set -e
 DSH_HOME="$DSH_HOME"
@@ -464,11 +475,10 @@ echo "=============================="
 echo "  🐋 DeepSeek Harness Web v0.0.1"
 echo "=============================="
 
-# 检查 API Key
+# 如果 .env 不存在（用户直接在WSL内启动），提示一下
 if [ ! -f "\$DSH_HOME/.env" ]; then
-    echo "警告: 未找到 .env 文件，请先配置 API Key:"
-    echo "  echo 'DEEPSEEK_API_KEY=sk-xxx' > \$DSH_HOME/.env"
-    exit 1
+    echo "提示: 未找到 .env 文件。请通过 DSH-Tray.exe 启动（会自动解密Token）。"
+    echo "      或手动写入 DEEPSEEK_API_KEY=sk-xxx 到 \$DSH_HOME/.env 后再运行。"
 fi
 
 # 启动 DSH Web
@@ -498,22 +508,38 @@ pnpm dsh $DSH_PROFILE --port $DSH_PORT
 
     # 3.5 生成 Windows 快捷方式
     Write-Host "[3.5] 生成 Windows 桌面快捷方式..."
-    $shortcutPath = "$env:USERPROFILE\Desktop\DSH-Web.lnk"
-
-    # 黑鲸鱼图标（同目录下 icon.ico）
     $iconPath = Join-Path $ScriptDir "icon.ico"
     if (-not (Test-Path $iconPath)) { $iconPath = "wsl.exe,0" }
 
+    # 优先指向 DSH-Tray.exe（如果已编译），否则指向启动脚本
+    $trayExe = Join-Path $ScriptDir "DSH-Tray.exe"
     $WScriptShell = New-Object -ComObject WScript.Shell
-    $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = "wsl.exe"
-    # 终端标题设为 "DeepSeek Harness Web v0.0.1"，再执行启动脚本
-    $shortcut.Arguments = "-d $WSL_DISTRO -- bash -c `"echo -ne '\033]0;🐋 DeepSeek Harness Web v0.0.1\007'; exec ~/start-dsh.sh`""
-    $shortcut.WorkingDirectory = "%USERPROFILE%"
-    $shortcut.IconLocation = "$iconPath,0"
-    $shortcut.Description = "🐋 DeepSeek Harness Web v0.0.1 - 双击启动"
-    $shortcut.Save()
-    Test-OK "桌面快捷方式已创建: $shortcutPath (黑鲸鱼图标)"
+
+    if (Test-Path $trayExe) {
+        # 指向编译好的托盘exe
+        $shortcutPath = "$env:USERPROFILE\Desktop\DSH.lnk"
+        $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $trayExe
+        $shortcut.WorkingDirectory = $ScriptDir
+        $shortcut.IconLocation = "$trayExe,0"
+        $shortcut.Description = "🐋 DeepSeek Harness v0.0.1 - 双击启动托盘"
+        $shortcut.Save()
+        Test-OK "桌面快捷方式已创建（托盘模式）: $shortcutPath"
+    } else {
+        # 回退到终端启动bat
+        $batFile = Join-Path $ScriptDir "DSH-Web-启动.bat"
+        if (Test-Path $batFile) {
+            $shortcutPath = "$env:USERPROFILE\Desktop\DSH-Web.lnk"
+            $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = $batFile
+            $shortcut.WorkingDirectory = $ScriptDir
+            $shortcut.IconLocation = "$iconPath,0"
+            $shortcut.Description = "🐋 DeepSeek Harness Web v0.0.1"
+            $shortcut.Save()
+            Test-OK "桌面快捷方式已创建（终端模式）: $shortcutPath"
+            Write-Host "  ℹ️ 提示：编译 DSH-Tray.exe 后快捷方式将指向托盘管理器" -ForegroundColor Cyan
+        }
+    }
 
     # 3.6 验证配置
     Write-Host "[3.6] 验证 DSH 配置..."
