@@ -220,6 +220,24 @@ function Start-Part1-WSL {
         if ($userHasTarget) {
             # 用户已有 Ubuntu-24.04 → 临时改名让出位置 → 装新的 → 改回
             Write-Host "  检测到已有 $targetName，临时改名让出位置..."
+
+            # 检查原系统是否正在运行
+            $runningInfo = wsl -l -v 2>&1 | Select-String $targetName
+            if ($runningInfo -match "Running") {
+                Write-Host ""
+                Write-Host "  ⚠️  $targetName 正在运行中！" -ForegroundColor Yellow
+                Write-Host "  临时改名需要停止原系统中的所有服务（包括 DSH）" -ForegroundColor Yellow
+                Write-Host "  改名完成后会自动恢复，但服务需要手动重启" -ForegroundColor Yellow
+                Write-Host ""
+                $confirm = Read-Host "  是否继续？(y/N)"
+                if ($confirm -ne "y" -and $confirm -ne "Y") {
+                    Write-Host "  已取消。请先手动停止服务后重试" -ForegroundColor Yellow
+                    exit 0
+                }
+                wsl --terminate $targetName 2>&1 | Out-Null
+                Start-Sleep -Seconds 2
+            }
+
             $backupName = "${targetName}-backup"
             $backupTar = Join-Path $ScriptDir "_wsl_backup.tar"
             $newTar = Join-Path $ScriptDir "_wsl_new.tar"
