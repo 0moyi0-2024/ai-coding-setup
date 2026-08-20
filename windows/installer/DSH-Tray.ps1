@@ -32,6 +32,8 @@ $providers = @(
 $script:isRunning = $false
 $script:notifyIcon = $null
 $script:contextMenu = $null
+$script:terminalProcess = $null   # 日志终端窗口进程
+$DSH_LOG_FILE = "/tmp/dsh.log"    # DSH 日志文件路径
 
 # ===== WSL 辅助函数 =====
 function Invoke-WslHidden {
@@ -131,7 +133,7 @@ function Show-TokenStatus {
 function Start-DSH {
     if ($script:isRunning) { return }
     try {
-        $startCmd = "cd $DSH_HOME && nohup pnpm dsh $DSH_PROFILE --port $DSH_PORT > /dev/null 2>&1 &"
+        $startCmd = "cd $DSH_HOME && nohup pnpm dsh $DSH_PROFILE --port $DSH_PORT > $DSH_LOG_FILE 2>&1 &"
         Invoke-WslHidden $startCmd
         Start-Sleep -Seconds 3
         $testUrl = "http://localhost:$DSH_PORT"
@@ -187,6 +189,42 @@ function Open-Browser {
     }
 }
 
+# ===== 终端显示/隐藏 =====
+function Show-Terminal {
+    <# 打开一个新的 WSL 终端窗口，实时显示 DSH 日志 #>
+    if ($script:terminalProcess -and -not $script:terminalProcess.HasExited) {
+        # 已经有一个终端窗口了，尝试激活它
+        $script:notifyIcon.ShowBalloonTip(1000, "DSH", "终端窗口已打开", [System.Windows.Forms.ToolTipIcon]::Info)
+        return
+    }
+
+    # 确保日志文件存在
+    Invoke-WslHidden "touch $DSH_LOG_FILE 2>/dev/null"
+
+    # 打开新终端窗口，tail -f 实时日志
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "wsl.exe"
+    $psi.Arguments = "-d $WSL_DISTRO -- bash -c 'echo \"=== DSH 实时日志 (Ctrl+C 关闭) ===\" && echo \"\" && tail -f $DSH_LOG_FILE'"
+    $psi.UseShellExecute = $true   # 必须用 ShellExecute 才能打开独立窗口
+    $script:terminalProcess = [System.Diagnostics.Process]::Start($psi)
+
+    $script:notifyIcon.ShowBalloonTip(2000, "DSH 终端", "日志窗口已打开", [System.Windows.Forms.ToolTipIcon]::Info)
+    Update-Menu
+}
+
+function Hide-Terminal {
+    <# 关闭日志终端窗口 #>
+    if ($script:terminalProcess -and -not $script:terminalProcess.HasExited) {
+        $script:terminalProcess.Kill()
+        $script:terminalProcess = $null
+        $script:notifyIcon.ShowBalloonTip(2000, "DSH 终端", "日志窗口已关闭", [System.Windows.Forms.ToolTipIcon]::Info)
+    } else {
+        $script:terminalProcess = $null
+        $script:notifyIcon.ShowBalloonTip(1000, "DSH", "没有打开的终端窗口", [System.Windows.Forms.ToolTipIcon]::Info)
+    }
+    Update-Menu
+}
+
 # ===== 菜单构建 =====
 function Update-Menu {
     $script:contextMenu.Items.Clear()
@@ -219,6 +257,19 @@ function Update-Menu {
     $openItem.Text = "🌐 打开 Web 界面"
     $openItem.Add_Click({ Open-Browser })
     $script:contextMenu.Items.Add($openItem)
+
+    # ====== 终端显示/隐藏 ======
+    if ($script:terminalProcess -and -not $script:terminalProcess.HasExited) {
+        $hideTerminal = New-Object System.Windows.Forms.ToolStripMenuItem
+        $hideTerminal.Text = "📺 隐藏终端"
+        $hideTerminal.Add_Click({ Hide-Terminal })
+        $script:contextMenu.Items.Add($hideTerminal)
+    } else {
+        $showTerminal = New-Object System.Windows.Forms.ToolStripMenuItem
+        $showTerminal.Text = "📺 显示终端"
+        $showTerminal.Add_Click({ Show-Terminal })
+        $script:contextMenu.Items.Add($showTerminal)
+    }
     $script:contextMenu.Items.Add("-")
 
     # ====== Token 配置子菜单 ======
@@ -251,6 +302,7 @@ function Update-Menu {
     $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem
     $exitItem.Text = "❌ 退出"
     $exitItem.Add_Click({
+        Hide-Terminal
         Stop-DSH
         $script:notifyIcon.Visible = $false
         [System.Windows.Forms.Application]::Exit()
