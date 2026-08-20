@@ -201,21 +201,72 @@ function Start-Part1-WSL {
         Test-OK "WSL 2 已设为默认"
     }
 
-    # 1.6 安装 Ubuntu 发行版
-    Write-Host "[1.6] 安装 $script:WSL_DISTRO..."
-    $existingDistro = wsl -l -q 2>&1 | Select-String $script:WSL_DISTRO
-    if ($existingDistro) {
-        Write-Host "  $script:WSL_DISTRO 已存在，跳过安装" -ForegroundColor Green
-        wsl --set-default $script:WSL_DISTRO 2>&1 | Out-Null
-        Test-OK "$script:WSL_DISTRO 已存在（已设为默认）"
+    # 1.6 安装 Ubuntu 发行版（最终命名为 dsh）
+    Write-Host "[1.6] 安装 Ubuntu（最终 WSL 名称: dsh）..."
+
+    # 检查是否已有名为 dsh 的发行版
+    $dshExists = wsl -l -q 2>&1 | Select-String "^dsh$"
+    if ($dshExists) {
+        Write-Host "  dsh 已存在，跳过安装" -ForegroundColor Green
+        wsl --set-default dsh 2>&1 | Out-Null
+        $script:WSL_DISTRO = "dsh"
+        $global:WSL_DISTRO = "dsh"
+        $WSL_DISTRO = "dsh"
+        Test-OK "dsh 已就绪（已设为默认）"
     } else {
-        Write-Host "  正在下载并安装 $script:WSL_DISTRO（首次约 500MB，需几分钟）..."
-        wsl --install -d $script:WSL_DISTRO --no-launch 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "Ubuntu 安装失败，请检查网络后重试"
+        # 选择一个临时发行版作为安装源（不动用户已有的系统）
+        $tempDistro = $script:WSL_DISTRO  # 优先用检测到的版本
+        $existingTemp = wsl -l -q 2>&1 | Select-String $tempDistro
+        
+        if ($existingTemp) {
+            # 用户已有这个版本，换另一个版本做中转
+            if ($tempDistro -eq "Ubuntu-24.04") {
+                $tempDistro = "Ubuntu-22.04"
+            } else {
+                $tempDistro = "Ubuntu-24.04"
+            }
+            Write-Host "  检测到已有 $($script:WSL_DISTRO)，改用 $tempDistro 做中转安装" -ForegroundColor Yellow
         }
-        wsl --set-default $script:WSL_DISTRO 2>&1 | Out-Null
-        Test-OK "$script:WSL_DISTRO 安装完成（已设为默认 WSL 发行版）"
+
+        # 安装临时发行版
+        $tempExists = wsl -l -q 2>&1 | Select-String $tempDistro
+        if (-not $tempExists) {
+            Write-Host "  正在下载 Ubuntu（首次约 500MB，需几分钟）..."
+            wsl --install -d $tempDistro --no-launch 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Ubuntu 安装失败，请检查网络后重试" }
+        }
+
+        # 导出 → 以 dsh 名字重新导入 → 删除临时版
+        Write-Host "  导入为 dsh..."
+        $tempTar = Join-Path $ScriptDir "_wsl_dsh_temp.tar"
+        wsl --export $tempDistro $tempTar 2>&1 | Out-Null
+        wsl --import dsh C:\WSL\dsh $tempTar 2>&1 | Out-Null
+        Remove-Item $tempTar -Force -ErrorAction SilentlyContinue
+
+        # 卸载临时发行版（只删中转的，不动用户原有系统）
+        wsl --unregister $tempDistro 2>&1 | Out-Null
+
+        # 创建用户 dsh（密码 123456），设 sudo 权限，设默认用户
+        Write-Host "  创建 dsh 用户（密码: 123456）..."
+        $createUser = @'
+useradd -m -s /bin/bash dsh 2>/dev/null
+echo "dsh:123456" | chpasswd
+usermod -aG sudo dsh 2>/dev/null
+echo -e "[user]\ndefault=dsh" > /etc/wsl.conf
+echo "USER-OK"
+'@
+        $createUser | wsl -d dsh -- bash 2>&1 | Out-Null
+        $userCheck = wsl -d dsh -- bash -c "id dsh 2>&1"
+        if ($userCheck -match "uid=") {
+            Write-Host "  dsh 用户已创建" -ForegroundColor Green
+        }
+
+        # 更新变量
+        wsl --set-default dsh 2>&1 | Out-Null
+        $script:WSL_DISTRO = "dsh"
+        $global:WSL_DISTRO = "dsh"
+        $WSL_DISTRO = "dsh"
+        Test-OK "WSL 发行版已创建: dsh（用户: dsh, 密码: 123456）"
     }
 
     # 1.7 验证 WSL 可用
