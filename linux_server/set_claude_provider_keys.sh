@@ -82,31 +82,6 @@ require_command() {
   command_exists "$1" || die "Missing required command: $1"
 }
 
-ensure_configuration_dependencies() {
-  local -a missing=()
-  command_exists jq || missing+=(jq)
-  command_exists curl || missing+=(curl)
-  command_exists openssl || missing+=(openssl)
-  ((${#missing[@]} == 0)) && return 0
-
-  log "Installing missing configuration dependencies: ${missing[*]}"
-  if command_exists apt-get; then
-    apt-get update
-    apt-get install -y "${missing[@]}"
-  elif command_exists dnf; then
-    dnf install -y "${missing[@]}"
-  elif command_exists yum; then
-    yum install -y "${missing[@]}"
-  else
-    die "Missing required command(s): ${missing[*]}. Install them manually."
-  fi
-
-  local command
-  for command in "${missing[@]}"; do
-    require_command "${command}"
-  done
-}
-
 write_secure_file() {
   local file=$1
   local content=$2
@@ -520,7 +495,8 @@ augment_codex_model_catalog() {
      | .models = [
          .models[] |
          .supports_search_tool = false |
-         del(.apply_patch_tool_type, .web_search_tool_type) |
+         .apply_patch_tool_type = "" |
+         .web_search_tool_type = "" |
          .support_verbosity = false
        ]
      | .models += [
@@ -538,12 +514,16 @@ augment_codex_model_catalog() {
              priority:100,
              additional_speed_tiers:[],
              service_tiers:[],
+             availability_nux:"",
+             upgrade:"",
              base_instructions:"You are Codex, a coding agent.",
              default_reasoning_summary:"none",
              support_verbosity:false,
              truncation_policy:{mode:"tokens",limit:10000},
              supports_parallel_tool_calls:false,
              supports_image_detail_original:false,
+             apply_patch_tool_type:"",
+             web_search_tool_type:"",
              context_window:(if ($slug | startswith("claude-")) then 200000
                              elif ($slug | test("^(deepseek|qwen)")) then 1000000
                              else 128000 end),
@@ -1125,7 +1105,9 @@ parse_args() {
 
 require_configuration_dependencies() {
   if ((CONFIGURE_GATEWAYS && !DRY_RUN)); then
-    ensure_configuration_dependencies
+    require_command jq
+    require_command curl
+    require_command openssl
   fi
 }
 
