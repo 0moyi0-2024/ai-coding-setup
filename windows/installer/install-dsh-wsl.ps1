@@ -204,51 +204,60 @@ function Start-Part1-WSL {
     # 1.6 安装全新的 Ubuntu 并命名为 Ubuntu-版本-日期
     Write-Host "[1.6] 安装全新 Ubuntu（不影响你原有系统）..."
 
-    # 生成目标名称: Ubuntu-24.04-20260821
     $ubuntuVer = if ($script:WSL_DISTRO -match "(\d+\.\d+)") { $matches[1] } else { "24.04" }
     $dateStr = Get-Date -Format "yyyyMMdd"
     $dshName = "Ubuntu-${ubuntuVer}-${dateStr}"
+    $targetName = "Ubuntu-${ubuntuVer}"
 
     # 检查是否已有同名发行版
     $dshExists = wsl -l -q 2>&1 | Select-String $dshName
     if ($dshExists) {
         Write-Host "  $dshName 已存在，跳过" -ForegroundColor Green
     } else {
-        # 选一个不和已有系统冲突的版本来安装
         $allDistros = wsl -l -q 2>&1
-        if ($allDistros -match "Ubuntu-${ubuntuVer}") {
-            # 目标版本已存在，用另一个版本做中转
-            $tempVer = if ($ubuntuVer -eq "24.04") { "22.04" } else { "24.04" }
-            Write-Host "  已有 Ubuntu-${ubuntuVer}，先安装 Ubuntu-${tempVer} 做中转..."
+        $userHasTarget = $allDistros -match $targetName
+
+        if ($userHasTarget) {
+            # 用户已有 Ubuntu-24.04 → 临时改名让出位置 → 装新的 → 改回
+            Write-Host "  检测到已有 $targetName，临时改名让出位置..."
+            $backupName = "${targetName}-backup"
+            $backupTar = Join-Path $ScriptDir "_wsl_backup.tar"
+            $newTar = Join-Path $ScriptDir "_wsl_new.tar"
+
+            # 1) 导出原有系统 → 导入为备份名 → 卸载原名
+            Write-Host "    1/4 备份原有 $targetName..."
+            wsl --export $targetName $backupTar 2>&1 | Out-Null
+            wsl --import $backupName "C:\WSL\$backupName" $backupTar 2>&1 | Out-Null
+            wsl --unregister $targetName 2>&1 | Out-Null
+
+            # 2) 安装全新系统
+            Write-Host "    2/4 安装全新 $targetName..."
+            wsl --install -d $targetName --no-launch 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "安装失败" }
+
+            # 3) 导出新系统 → 导入为目标名称 → 卸载新系统原名
+            Write-Host "    3/4 导入为 $dshName..."
+            wsl --export $targetName $newTar 2>&1 | Out-Null
+            wsl --import $dshName "C:\WSL\$dshName" $newTar 2>&1 | Out-Null
+            wsl --unregister $targetName 2>&1 | Out-Null
+
+            # 4) 恢复原有系统
+            Write-Host "    4/4 恢复原有 $targetName..."
+            wsl --import $targetName "C:\WSL\$targetName" $backupTar 2>&1 | Out-Null
+            wsl --unregister $backupName 2>&1 | Out-Null
+            Remove-Item $backupTar, $newTar -Force -ErrorAction SilentlyContinue
         } else {
-            $tempVer = $ubuntuVer
-        }
-        $tempName = "Ubuntu-${tempVer}"
+            # 没有同名系统，直接安装
+            Write-Host "  正在下载 Ubuntu-${ubuntuVer}（约 500MB，首次需几分钟）..."
+            wsl --install -d $targetName --no-launch 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Ubuntu-${ubuntuVer} 安装失败，请检查网络" }
 
-        # 安装临时发行版
-        $tempExists = wsl -l -q 2>&1 | Select-String $tempName
-        if (-not $tempExists) {
-            Write-Host "  正在下载 Ubuntu-${tempVer}（约 500MB，首次需几分钟）..."
-            wsl --install -d $tempName --no-launch 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "Ubuntu-${tempVer} 安装失败，请检查网络" }
-        }
-
-        # 导出 → 导入为目标名称
-        Write-Host "  导入为 $dshName..."
-        $tempTar = Join-Path $ScriptDir "_wsl_temp.tar"
-        wsl --export $tempName $tempTar 2>&1 | Out-Null
-        wsl --import $dshName "C:\WSL\$dshName" $tempTar 2>&1 | Out-Null
-        Remove-Item $tempTar -Force -ErrorAction SilentlyContinue
-
-        # 删除临时发行版（只删中转的，不动用户原有系统）
-        if (-not ($allDistros -match $tempName)) {
-            wsl --unregister $tempName 2>&1 | Out-Null
-        }
-
-        # 如果中转版本 ≠ 期望版本，更新 $dshName 反映实际版本
-        if ($tempVer -ne $ubuntuVer) {
-            $dshName = "Ubuntu-${tempVer}-${dateStr}"
-            Write-Host "  注意: 目标版本 ${ubuntuVer} 已存在，实际安装 ${tempVer}" -ForegroundColor Yellow
+            Write-Host "  导入为 $dshName..."
+            $tmpTar = Join-Path $ScriptDir "_wsl_temp.tar"
+            wsl --export $targetName $tmpTar 2>&1 | Out-Null
+            wsl --import $dshName "C:\WSL\$dshName" $tmpTar 2>&1 | Out-Null
+            wsl --unregister $targetName 2>&1 | Out-Null
+            Remove-Item $tmpTar -Force -ErrorAction SilentlyContinue
         }
 
         # 创建用户 dsh（密码 123456），设 sudo 权限，设默认用户
