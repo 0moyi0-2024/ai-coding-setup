@@ -137,14 +137,25 @@ function Invoke-WslSilent {
 function Start-Part1-WSL {
     Write-Step "Part 1: 安装 WSL + Ubuntu 24.04"
 
-    # 1.1 检查管理员权限（不是管理员则自动提权重启）
+    # 1.1 检查管理员权限
     Write-Host "[1.1] 检查管理员权限..."
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    # 用 net session 检测（最可靠，兼容域环境）
+    $isAdmin = $false
+    try {
+        net session 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { $isAdmin = $true }
+    } catch {}
     if (-not $isAdmin) {
-        Write-Host "  正在请求管理员权限..." -ForegroundColor Yellow
-        $args = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Step $Step"
-        Start-Process powershell -ArgumentList $args -Verb RunAs -Wait -WorkingDirectory $ScriptDir
-        exit
+        Write-Host "  ❌ 需要管理员权限" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  请关闭此窗口，然后以管理员身份重新打开 PowerShell：" -ForegroundColor Yellow
+        Write-Host "  1. 按 Win 键 → 输入 PowerShell" -ForegroundColor White
+        Write-Host "  2. 右键 → 以管理员身份运行" -ForegroundColor White
+        Write-Host "  3. 执行: cd '$ScriptDir'" -ForegroundColor White
+        Write-Host "  4. 执行: .\install-dsh-wsl.ps1" -ForegroundColor White
+        Write-Host ""
+        pause
+        exit 1
     }
     Test-OK "管理员权限"
 
