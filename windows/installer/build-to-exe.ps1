@@ -71,7 +71,7 @@ $exeParams = @{
     noOutput   = $true
 }
 
-Invoke-PS2EXE @exeParams
+Invoke-PS2EXE @exeParams @iconParam
 
 if (Test-Path $outputFile) {
     $fileSize = (Get-Item $outputFile).Length / 1KB
@@ -91,16 +91,44 @@ if ($buildCleanup -eq "y" -or $buildCleanup -eq "Y") {
     $cleanupFile = Join-Path $ScriptDir "清理DSH.ps1"
     if (Test-Path $cleanupFile) {
         $cleanupOutput = Join-Path $ScriptDir "清理DSH.exe"
-        Invoke-PS2EXE -inputFile $cleanupFile -outputFile $cleanupOutput -title "DSH 清理工具" -description "清理 DeepSeek Harness 安装残留" -company "0moyi0-2024" -product "DSH Cleanup" -version "1.0.0.0" -noConsole $false -runtime "win10" -x64 $true -noOutput $true
+        $cleanupParams = @{
+            inputFile   = $cleanupFile
+            outputFile  = $cleanupOutput
+            title       = "DSH 清理工具"
+            description = "清理 DeepSeek Harness 安装残留"
+            company     = "0moyi0-2024"
+            product     = "DSH Cleanup"
+            version     = "1.0.0.0"
+            noConsole   = $false
+            runtime     = "win10"
+            x64         = $true
+            noOutput    = $true
+        }
+        if (Test-Path $iconFile) { $cleanupParams['iconFile'] = $iconFile }
+        Invoke-PS2EXE @cleanupParams
         Write-Host "  ✅ 清理脚本已编译: $cleanupOutput" -ForegroundColor Green
     }
 
     $trayFile = Join-Path $ScriptDir "DSH-Tray.ps1"
     if (Test-Path $trayFile) {
         $trayOutput = Join-Path $ScriptDir "DSH-Tray.exe"
-        Invoke-PS2EXE -inputFile $trayFile -outputFile $trayOutput -title "DSH 托盘管理器" -description "DSH 系统托盘管理（右键菜单启动/停止）" -company "0moyi0-2024" -product "DSH Tray" -version "1.0.0.0" -noConsole $true -runtime "win10" -x64 $true -noOutput $true
+        $trayParams = @{
+            inputFile   = $trayFile
+            outputFile  = $trayOutput
+            title       = "DSH 托盘管理器"
+            description = "DSH 系统托盘管理（右键菜单启动/停止）"
+            company     = "0moyi0-2024"
+            product     = "DSH Tray"
+            version     = "1.0.0.0"
+            noConsole   = $true
+            runtime     = "win10"
+            x64         = $true
+            noOutput    = $true
+        }
+        if (Test-Path $iconFile) { $trayParams['iconFile'] = $iconFile }
+        Invoke-PS2EXE @trayParams
         Write-Host "  ✅ 托盘脚本已编译: $trayOutput" -ForegroundColor Green
-        Write-Host "  ℹ️  双击 DSH-Tray.exe 即可在右下角显示图标" -ForegroundColor Cyan
+        Write-Host "  ℹ️  双击 DSH-Tray.exe 即可在右下角显示鲸鱼图标" -ForegroundColor Cyan
     }
 }
 

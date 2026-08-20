@@ -17,8 +17,16 @@ $WSL_DISTRO   = "Ubuntu-24.04"
 $DSH_HOME     = "/home/dsh/dsh"
 $DSH_PORT     = 3080
 $DSH_PROFILE  = "web"
-$TRAY_ICON    = [System.Drawing.SystemIcons]::Application
+$DSH_LOG_FILE = "/tmp/dsh.log"
 $ENV_FILE     = "$DSH_HOME/.env"
+
+# 加载托盘图标（同目录下 icon.ico，没有则用系统图标）
+$ICON_FILE = Join-Path $PSScriptRoot "icon.ico"
+if (Test-Path $ICON_FILE) {
+    $TRAY_ICON = New-Object System.Drawing.Icon($ICON_FILE)
+} else {
+    $TRAY_ICON = [System.Drawing.SystemIcons]::Application
+}
 
 # ===== Token 提供商定义 =====
 $providers = @(
@@ -35,7 +43,6 @@ $script:contextMenu = $null
 $script:terminalProcess = $null   # 日志终端窗口进程
 $script:browserProcess = $null    # 浏览器窗口进程
 $script:lastBrowserState = $false # 上次浏览器状态（用于检测手动变化）
-$DSH_LOG_FILE = "/tmp/dsh.log"    # DSH 日志文件路径
 
 # ===== WSL 辅助函数 =====
 function Invoke-WslHidden {
@@ -196,13 +203,31 @@ function Open-Browser {
 }
 
 function Close-Browser {
-    <# 关闭浏览器窗口 #>
+    <# 关闭浏览器窗口（包括托盘打开的和用户手动打开的） #>
+    $killed = $false
+
+    # 1. 先关闭我们跟踪的进程
     if ($script:browserProcess -and -not $script:browserProcess.HasExited) {
         $script:browserProcess.Kill()
-        $script:browserProcess = $null
+        $killed = $true
+    }
+    $script:browserProcess = $null
+
+    # 2. 关闭连接到 DSH 端口的浏览器进程（用户手动打开的情况）
+    try {
+        $connections = Get-NetTCPConnection -LocalPort $DSH_PORT -State Established -ErrorAction SilentlyContinue
+        foreach ($conn in $connections) {
+            $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+            if ($proc -and $proc.ProcessName -match "chrome|msedge|firefox|brave|opera|iexplore") {
+                $proc.Kill()
+                $killed = $true
+            }
+        }
+    } catch {}
+
+    if ($killed) {
         $script:notifyIcon.ShowBalloonTip(2000, "DSH", "浏览器已关闭", [System.Windows.Forms.ToolTipIcon]::Info)
     } else {
-        $script:browserProcess = $null
         $script:notifyIcon.ShowBalloonTip(1000, "DSH", "浏览器未打开", [System.Windows.Forms.ToolTipIcon]::Info)
     }
     Update-Menu
@@ -348,16 +373,20 @@ function Update-Menu {
     $tokenMenu.DropDownItems.Add($viewToken)
     $tokenMenu.DropDownItems.Add("-")
 
+    $config = Get-EnvConfig
     foreach ($provider in $providers) {
         $item = New-Object System.Windows.Forms.ToolStripMenuItem
-        $config = Get-EnvConfig
         $key = $provider.EnvKey
         $indicator = if ($config[$key]) { "✅" } else { "⭕" }
         $item.Text = "$indicator $($provider.Name) ($($provider.Desc))"
+        # 用 GetNewClosure() 固定当前循环变量，避免闭包捕获最后一个值
+        $pName = $provider.Name
+        $pKey = $provider.EnvKey
+        $pDesc = $provider.Desc
         $item.Add_Click({
-            Set-Token -ProviderName $provider.Name -EnvKey $provider.EnvKey -Description $provider.Desc
+            Set-Token -ProviderName $pName -EnvKey $pKey -Description $pDesc
             Update-Menu
-        })
+        }.GetNewClosure())
         $tokenMenu.DropDownItems.Add($item)
     }
     $script:contextMenu.Items.Add($tokenMenu)

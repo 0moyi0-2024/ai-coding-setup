@@ -27,8 +27,8 @@ DisableProgramGroupPage=yes
 ; 安装包输出
 OutputDir=.
 OutputBaseFilename=DSH-一键安装-{#MyAppVersion}
-;SetupIconFile=icon.ico
-;UninstallDisplayIcon={app}\icon.ico
+SetupIconFile=icon.ico
+UninstallDisplayIcon={app}\DSH-Tray.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
