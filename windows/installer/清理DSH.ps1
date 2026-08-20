@@ -62,12 +62,16 @@ Write-Host ""
 
 # ===== 1. 删除桌面快捷方式 =====
 Write-Host "[1/5] 删除桌面快捷方式..."
-$shortcutPath = "$DesktopPath\DSH-Web.lnk"
-if (Test-Path $shortcutPath) {
-    Remove-Item $shortcutPath -Force
-    Write-Host "  ✅ 已删除桌面快捷方式" -ForegroundColor Green
-} else {
-    Write-Host "  ⏭️  桌面快捷方式不存在，跳过" -ForegroundColor Gray
+$deletedShortcut = $false
+foreach ($lnk in @("$DesktopPath\DSH.lnk", "$DesktopPath\DSH-Web.lnk")) {
+    if (Test-Path $lnk) {
+        Remove-Item $lnk -Force
+        Write-Host "  已删除: $lnk" -ForegroundColor Green
+        $deletedShortcut = $true
+    }
+}
+if (-not $deletedShortcut) {
+    Write-Host "  桌面快捷方式不存在，跳过" -ForegroundColor Gray
 }
 
 # ===== 2. 清理 WSL 内的 DSH 源码 =====
@@ -89,7 +93,7 @@ Write-Host "[3/5] 清理 WSL 内的 /agent 目录..."
 try {
     $wslExists = wsl -l -q 2>&1 | Select-String $WSL_DISTRO
     if ($wslExists) {
-        wsl -d $WSL_DISTRO -- bash -c "if [ -d '$AGENT_DIR' ]; then sudo rm -rf '$AGENT_DIR'; echo 'deleted'; fi" 2>$null
+        wsl -d $WSL_DISTRO -- bash -c "if [ -d '$AGENT_DIR' ]; then rm -rf '$AGENT_DIR' 2>/dev/null || sudo rm -rf '$AGENT_DIR'; echo 'deleted'; fi" 2>$null
         Write-Host "  ✅ 已删除 /agent 目录" -ForegroundColor Green
     } else {
         Write-Host "  ⏭️  WSL 发行版不存在，跳过" -ForegroundColor Gray
@@ -131,7 +135,7 @@ try {
 # ===== 额外：关闭 Windows 防火墙规则 =====
 Write-Host "[额外] 清理防火墙规则..."
 try {
-    $ruleName = "DSH-Web-3080"
+    $ruleName = "DSH-Web-$global:DSH_PORT"
     $existingRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
     if ($existingRule) {
         Remove-NetFirewallRule -DisplayName $ruleName

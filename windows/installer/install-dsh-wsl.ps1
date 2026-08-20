@@ -32,8 +32,10 @@ $LogFile = Join-Path $ScriptDir "dsh-install-$(Get-Date -Format 'yyyyMMdd-HHmmss
 
 # 任何异常/中断时，清理 WSL 内明文 .env（防止 API Key 残留）
 trap {
-    try { wsl -d $global:WSL_DISTRO -- bash -c "rm -f '$global:DSH_ENV_FILE' 2>/dev/null" 2>$null } catch {}
-    Write-Host "  ⚠️  已清理临时 .env" -ForegroundColor Yellow
+    if ($global:WSL_DISTRO -and $global:WSL_DISTRO -ne "auto" -and $global:DSH_ENV_FILE) {
+        try { wsl -d $global:WSL_DISTRO -- bash -c "rm -f '$global:DSH_ENV_FILE' 2>/dev/null" 2>$null } catch {}
+        Write-Host "  已清理临时 .env" -ForegroundColor Yellow
+    }
     break
 }
 
@@ -183,9 +185,15 @@ function Start-Part1-WSL {
         # 1.4 启用 WSL 功能
         Write-Host "[1.4] 启用 WSL 功能..."
         Write-Host "  正在启用 VirtualMachinePlatform 和 WSL..."
-        dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart | Out-Null
-        dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart | Out-Null
-        Write-Host "  ✅ WSL 功能已启用" -ForegroundColor Green
+        $dismResult = dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart 2>&1
+        if ($dismResult -match "Error|失败") {
+            Write-Host "  VirtualMachinePlatform 启用失败" -ForegroundColor Red
+        }
+        $dismResult = dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart 2>&1
+        if ($dismResult -match "Error|失败") {
+            Write-Host "  WSL 功能启用失败" -ForegroundColor Red
+        }
+        Write-Host "  WSL 功能已启用" -ForegroundColor Green
 
         Write-Host ""
         Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Yellow
@@ -272,23 +280,45 @@ function Start-Part1-WSL {
 
             # 2) 安装全新系统
             Write-Host "    2/4 安装全新 $targetName..."
+            $installOk = $false
             wsl --install -d $targetName --no-launch 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                # 旧版 WSL 不支持 --no-launch，回退
+            if ($LASTEXITCODE -eq 0) { $installOk = $true }
+            if (-not $installOk) {
                 Write-Host "    --no-launch 不支持，改用标准安装..." -ForegroundColor Yellow
                 wsl --install -d $targetName 2>&1
-                if ($LASTEXITCODE -ne 0) { throw "安装 $targetName 失败" }
+                if ($LASTEXITCODE -eq 0) { $installOk = $true }
+            }
+            if (-not $installOk) {
+                # 安装失败，恢复原系统
+                Write-Host "    安装失败，恢复原有 $targetName..." -ForegroundColor Red
+                wsl --import $targetName "C:\WSL\$targetName" $backupTar 2>&1 | Out-Null
+                wsl --unregister $backupName 2>&1 | Out-Null
+                Remove-Item $backupTar, $newTar -Force -ErrorAction SilentlyContinue
+                throw "安装 $targetName 失败，原系统已恢复"
             }
 
             # 3) 导出新系统 → 导入为目标名称 → 卸载新系统原名
             Write-Host "    3/4 导入为 $dshName..."
             wsl --export $targetName $newTar 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "导出新系统失败" }
+            if ($LASTEXITCODE -ne 0) {
+                # 导出失败，恢复原系统
+                Write-Host "    导出失败，恢复原有 $targetName..." -ForegroundColor Red
+                wsl --import $targetName "C:\WSL\$targetName" $backupTar 2>&1 | Out-Null
+                wsl --unregister $backupName 2>&1 | Out-Null
+                Remove-Item $backupTar, $newTar -Force -ErrorAction SilentlyContinue
+                throw "导出新系统失败，原系统已恢复"
+            }
             New-Item -ItemType Directory -Path "C:\WSL\$dshName" -Force | Out-Null
             wsl --import $dshName "C:\WSL\$dshName" $newTar 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "导入 $dshName 失败" }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "    导入失败，恢复原有 $targetName..." -ForegroundColor Red
+                wsl --import $targetName "C:\WSL\$targetName" $backupTar 2>&1 | Out-Null
+                wsl --unregister $backupName 2>&1 | Out-Null
+                Remove-Item $backupTar, $newTar -Force -ErrorAction SilentlyContinue
+                throw "导入 $dshName 失败，原系统已恢复"
+            }
             wsl --unregister $targetName 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "卸载新系统失败" }
+            if ($LASTEXITCODE -ne 0) { throw "卸载新系统失败（但 $dshName 已创建）" }
 
             # 4) 恢复原有系统
             Write-Host "    4/4 恢复原有 $targetName..."
@@ -319,17 +349,29 @@ function Start-Part1-WSL {
             Remove-Item $tmpTar -Force -ErrorAction SilentlyContinue
         }
 
-        # 创建用户 dsh（密码 123456），设 sudo 权限，设默认用户
+        # 创建用户 dsh（密码 123456），设 sudo 权限，设默认用户，配置免密码sudo
         Write-Host "  创建 dsh 用户（密码: 123456）..."
         @"
 useradd -m -s /bin/bash dsh 2>/dev/null
 echo "dsh:123456" | chpasswd
 usermod -aG sudo dsh 2>/dev/null
+echo "dsh ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/dsh
+chmod 440 /etc/sudoers.d/dsh
 echo "[user]" > /etc/wsl.conf
 echo "default=dsh" >> /etc/wsl.conf
 "@ | wsl -d $dshName -- bash 2>&1 | Out-Null
-        $userCheck = wsl -d $dshName -- bash -c "id dsh 2>&1"
-        if ($userCheck -match "uid=") { Write-Host "  dsh 用户已创建" -ForegroundColor Green }
+
+        # 重启 WSL 让 wsl.conf 的默认用户生效
+        Write-Host "  重启 WSL 让默认用户生效..."
+        wsl --terminate $dshName 2>&1 | Out-Null
+        Start-Sleep -Seconds 2
+
+        $userCheck = wsl -d $dshName -- bash -c "id dsh 2>&1 && sudo -n true 2>&1 && echo USER-OK"
+        if ($userCheck -match "USER-OK") {
+            Write-Host "  dsh 用户已创建（含免密sudo）" -ForegroundColor Green
+        } else {
+            Write-Host "  警告: dsh 用户配置可能不完整: $userCheck" -ForegroundColor Yellow
+        }
     }
 
     # 设为默认
@@ -337,7 +379,7 @@ echo "default=dsh" >> /etc/wsl.conf
     $script:WSL_DISTRO = $dshName
     $global:WSL_DISTRO = $dshName
     $WSL_DISTRO = $dshName
-    Test-OK "WSL 发行版已创建: $dshName（你原有的 Ubuntu-24.04 完全未动）"
+    Test-OK "WSL 发行版已创建: $dshName（你原有的 $targetName 完全未动）"
 
     # 1.7 验证 WSL 可用
     Write-Host "[1.7] 验证 WSL 可用性..."
@@ -551,17 +593,17 @@ function Start-Part3-Config {
         }
     }
 
-    # 写入 .env 文件（一次性，给验证脚本用，后面由托盘启动时动态写入/删除）
+    # 写入 .env 文件（base64 编码，避免引号注入）
     $tokens = Get-DshTokens
     if ($tokens.ContainsKey("DEEPSEEK_API_KEY") -and $tokens["DEEPSEEK_API_KEY"]) {
         $val = ConvertTo-PlainText $tokens["DEEPSEEK_API_KEY"]
-        $envInit = @"
-echo 'DEEPSEEK_API_KEY=$val' > "$DSH_HOME/.env"
-chmod 600 "$DSH_HOME/.env"
-"@
-        Invoke-WslSilent $envInit
+        $envContent = "DEEPSEEK_API_KEY=$val"
+        $envB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($envContent))
+        Invoke-WslSilent "echo '$envB64' | base64 -d > '$DSH_HOME/.env' && chmod 600 '$DSH_HOME/.env' && echo ENV-OK"
         # 写入后立即在内存中清除
         $val = $null
+        $envContent = $null
+        $envB64 = $null
     }
 
     # 3.2 配置 DSH 环境变量
@@ -591,32 +633,32 @@ echo "环境变量已写入 ~/.bashrc"
     Write-Host "[3.3] 创建 DSH 启动脚本..."
     $startScript = @"
 #!/bin/bash
-# 🐋 DSH Web 启动脚本 v0.0.1
-# 用法: bash start-dsh.sh
-# 注意：Token 由 Windows 侧托盘（DSH-Tray.exe）通过加密存储管理，
-#       启动时由托盘临时写入 .env，停止时删除。
+# DSH Web startup script v$script:DSH_VERSION
+# Usage: bash ~/start-dsh.sh
+# Note: Token is managed by DSH-Tray.exe (Windows DPAPI encrypted),
+#       written to .env at startup, deleted at stop.
 
 set -e
 DSH_HOME="$DSH_HOME"
 cd "\$DSH_HOME"
 
 echo "=============================="
-echo "  🐋 DeepSeek Harness Web v0.0.1"
+echo "  DSH Web v$script:DSH_VERSION"
 echo "=============================="
 
-# 如果 .env 不存在（用户直接在WSL内启动），提示一下
 if [ ! -f "\$DSH_HOME/.env" ]; then
-    echo "提示: 未找到 .env 文件。请通过 DSH-Tray.exe 启动（会自动解密Token）。"
-    echo "      或手动写入 DEEPSEEK_API_KEY=sk-xxx 到 \$DSH_HOME/.env 后再运行。"
+    echo "Note: .env not found. Start via DSH-Tray.exe for auto Token."
+    echo "      Or manually set DEEPSEEK_API_KEY in \$DSH_HOME/.env"
 fi
 
-# 启动 DSH Web
-echo "启动 DSH Web (端口: $DSH_PORT)..."
-echo "浏览器访问: http://localhost:$DSH_PORT"
+echo "Starting DSH Web (port: $DSH_PORT)..."
+echo "Browser: http://localhost:$DSH_PORT"
 echo ""
 pnpm dsh $DSH_PROFILE --port $DSH_PORT
 "@
-    $startScript | Invoke-WslSilent "cat > ~/start-dsh.sh && chmod +x ~/start-dsh.sh"
+    # 通过 base64 写入文件，避免引号/换行问题
+    $startB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($startScript))
+    Invoke-WslSilent "echo '$startB64' | base64 -d > ~/start-dsh.sh && chmod +x ~/start-dsh.sh && echo START-OK"
     Test-OK "启动脚本已创建: ~/start-dsh.sh"
 
     # 3.4 配置 Windows 防火墙规则

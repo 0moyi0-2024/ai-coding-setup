@@ -24,10 +24,19 @@ function Invoke-WslHidden {
     $psi.RedirectStandardError = $true
 
     $p = [System.Diagnostics.Process]::Start($psi)
-    $p.WaitForExit($TimeoutMs)
-    $out = $p.StandardOutput.ReadToEnd()
-    $err = $p.StandardError.ReadToEnd()
-    return "$out`n$err"
+    # 先异步读取，避免死锁（stdout/stderr 缓冲区满导致挂起）
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    if (-not $p.WaitForExit($TimeoutMs)) {
+        try { $p.Kill() } catch {}
+        $out = $outTask.Result
+        $err = $errTask.Result
+        return "${out}`n[TIMEOUT after ${TimeoutMs}ms]`n${err}"
+    }
+    $out = $outTask.Result
+    $err = $errTask.Result
+    try { $p.Dispose() } catch {}
+    return "${out}`n${err}"
 }
 
 function Invoke-WslVisible {
