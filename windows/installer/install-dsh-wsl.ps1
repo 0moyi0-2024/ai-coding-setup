@@ -30,6 +30,13 @@ $LogFile = Join-Path $ScriptDir "dsh-install-$(Get-Date -Format 'yyyyMMdd-HHmmss
 # 加载共享配置（port, paths, version 等）
 . (Join-Path $ScriptDir "config.ps1")
 
+# 任何异常/中断时，清理 WSL 内明文 .env（防止 API Key 残留）
+trap {
+    try { wsl -d $global:WSL_DISTRO -- bash -c "rm -f '$global:DSH_ENV_FILE' 2>/dev/null" 2>$null } catch {}
+    Write-Host "  ⚠️  已清理临时 .env" -ForegroundColor Yellow
+    break
+}
+
 # 安装脚本专属配置（覆盖共享配置中需要改的）
 $WSL_DISTRO     = "auto"                   # "auto" = 自动检测（覆盖 config.ps1 的 ""）
 $WSL_USER       = "dsh"                    # WSL 内新建用户
@@ -127,9 +134,14 @@ function Test-FAIL {
 }
 
 function Invoke-WslSilent {
-    param([string]$Command)
-    $result = wsl -d $WSL_DISTRO -- bash -c $Command 2>&1
-    return $result
+    param(
+        [Parameter(ValueFromPipeline=$true)]
+        [string]$Command
+    )
+    process {
+        $result = wsl -d $WSL_DISTRO -- bash -c $Command 2>&1
+        return $result
+    }
 }
 
 # =============================================================================
@@ -209,20 +221,21 @@ function Start-Part1-WSL {
     $dshName = "Ubuntu-${ubuntuVer}-${dateStr}"
     $targetName = "Ubuntu-${ubuntuVer}"
 
-    # 检查是否已有同名发行版
-    $dshExists = wsl -l -q 2>&1 | Select-String $dshName
+    # 检查是否已有同名发行版（精确匹配，避免子串误判）
+    $dshExists = (wsl -l -q 2>&1) -split "`n" | Where-Object { $_.Trim() -eq $dshName }
     if ($dshExists) {
         Write-Host "  $dshName 已存在，跳过" -ForegroundColor Green
     } else {
-        $allDistros = wsl -l -q 2>&1
-        $userHasTarget = $allDistros -match $targetName
+        $allDistros = (wsl -l -q 2>&1) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        $userHasTarget = $allDistros -contains $targetName
 
         if ($userHasTarget) {
             # 用户已有 Ubuntu-24.04 → 临时改名让出位置 → 装新的 → 改回
             Write-Host "  检测到已有 $targetName，临时改名让出位置..."
 
-            # 检查原系统是否正在运行
-            $runningInfo = wsl -l -v 2>&1 | Select-String $targetName
+            # 检查原系统是否正在运行（精确匹配，转义正则特殊字符）
+            $escapedName = [regex]::Escape($targetName)
+            $runningInfo = (wsl -l -v 2>&1) -split "`n" | Where-Object { $_ -match "^\s*\*?\s*${escapedName}\s" }
             if ($runningInfo -match "Running") {
                 Write-Host ""
                 Write-Host "  ⚠️  $targetName 正在运行中！" -ForegroundColor Yellow
@@ -244,37 +257,65 @@ function Start-Part1-WSL {
 
             # 1) 导出原有系统 → 导入为备份名 → 卸载原名
             Write-Host "    1/4 备份原有 $targetName..."
-            wsl --export $targetName $backupTar 2>&1 | Out-Null
-            wsl --import $backupName "C:\WSL\$backupName" $backupTar 2>&1 | Out-Null
-            wsl --unregister $targetName 2>&1 | Out-Null
+            wsl --export $targetName $backupTar 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "备份 $targetName 失败（磁盘空间不足？）" }
+            New-Item -ItemType Directory -Path "C:\WSL\$backupName" -Force | Out-Null
+            wsl --import $backupName "C:\WSL\$backupName" $backupTar 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "导入备份 $backupName 失败" }
+            wsl --unregister $targetName 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                # 回滚：删除半成品备份，恢复原系统
+                Write-Host "  警告: 卸载 $targetName 失败，尝试回滚..." -ForegroundColor Yellow
+                wsl --unregister $backupName 2>&1 | Out-Null
+                throw "卸载 $targetName 失败，原系统未受影响"
+            }
 
             # 2) 安装全新系统
             Write-Host "    2/4 安装全新 $targetName..."
             wsl --install -d $targetName --no-launch 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "安装失败" }
+            if ($LASTEXITCODE -ne 0) {
+                # 旧版 WSL 不支持 --no-launch，回退
+                Write-Host "    --no-launch 不支持，改用标准安装..." -ForegroundColor Yellow
+                wsl --install -d $targetName 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "安装 $targetName 失败" }
+            }
 
             # 3) 导出新系统 → 导入为目标名称 → 卸载新系统原名
             Write-Host "    3/4 导入为 $dshName..."
-            wsl --export $targetName $newTar 2>&1 | Out-Null
-            wsl --import $dshName "C:\WSL\$dshName" $newTar 2>&1 | Out-Null
-            wsl --unregister $targetName 2>&1 | Out-Null
+            wsl --export $targetName $newTar 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "导出新系统失败" }
+            New-Item -ItemType Directory -Path "C:\WSL\$dshName" -Force | Out-Null
+            wsl --import $dshName "C:\WSL\$dshName" $newTar 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "导入 $dshName 失败" }
+            wsl --unregister $targetName 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "卸载新系统失败" }
 
             # 4) 恢复原有系统
             Write-Host "    4/4 恢复原有 $targetName..."
-            wsl --import $targetName "C:\WSL\$targetName" $backupTar 2>&1 | Out-Null
+            New-Item -ItemType Directory -Path "C:\WSL\$targetName" -Force | Out-Null
+            wsl --import $targetName "C:\WSL\$targetName" $backupTar 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "恢复 $targetName 失败！请手动执行: wsl --import $targetName C:\WSL\$targetName $backupTar" }
             wsl --unregister $backupName 2>&1 | Out-Null
             Remove-Item $backupTar, $newTar -Force -ErrorAction SilentlyContinue
         } else {
             # 没有同名系统，直接安装
             Write-Host "  正在下载 Ubuntu-${ubuntuVer}（约 500MB，首次需几分钟）..."
             wsl --install -d $targetName --no-launch 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "Ubuntu-${ubuntuVer} 安装失败，请检查网络" }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  --no-launch 不支持，改用标准安装..." -ForegroundColor Yellow
+                wsl --install -d $targetName 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "Ubuntu-${ubuntuVer} 安装失败，请检查网络" }
+            }
 
             Write-Host "  导入为 $dshName..."
             $tmpTar = Join-Path $ScriptDir "_wsl_temp.tar"
-            wsl --export $targetName $tmpTar 2>&1 | Out-Null
-            wsl --import $dshName "C:\WSL\$dshName" $tmpTar 2>&1 | Out-Null
-            wsl --unregister $targetName 2>&1 | Out-Null
+            wsl --export $targetName $tmpTar 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "导出临时系统失败" }
+            New-Item -ItemType Directory -Path "C:\WSL\$dshName" -Force | Out-Null
+            wsl --import $dshName "C:\WSL\$dshName" $tmpTar 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "导入 $dshName 失败" }
+            wsl --unregister $targetName 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "卸载临时系统失败" }
             Remove-Item $tmpTar -Force -ErrorAction SilentlyContinue
         }
 
@@ -284,7 +325,8 @@ function Start-Part1-WSL {
 useradd -m -s /bin/bash dsh 2>/dev/null
 echo "dsh:123456" | chpasswd
 usermod -aG sudo dsh 2>/dev/null
-echo -e "[user]\ndefault=dsh" > /etc/wsl.conf
+echo "[user]" > /etc/wsl.conf
+echo "default=dsh" >> /etc/wsl.conf
 "@ | wsl -d $dshName -- bash 2>&1 | Out-Null
         $userCheck = wsl -d $dshName -- bash -c "id dsh 2>&1"
         if ($userCheck -match "uid=") { Write-Host "  dsh 用户已创建" -ForegroundColor Green }
@@ -340,6 +382,11 @@ echo ">>> 基础环境配置完成"
 
 function Start-Part2-DSH {
     Write-Step "Part 2: 安装 DSH（DeepSeek Harness）"
+
+    # 确保 WSL 发行版已配置（Part 1 必须先执行）
+    if ($script:WSL_DISTRO -eq "auto" -or $script:WSL_DISTRO -eq "") {
+        throw "WSL 发行版未配置，请先执行 Part 1（不加 -Step 参数）"
+    }
 
     # 2.1 安装 Node.js
     Write-Host "[2.1] 安装 Node.js v$NODE_VERSION..."
@@ -399,7 +446,7 @@ if [ -d "\$DSH_HOME/.git" ]; then
     echo "  DSH 仓库已存在，更新..."
     cd "\$DSH_HOME"
     git fetch origin
-    git pull origin master
+    git pull origin \$(git rev-parse --abbrev-ref HEAD)
 else
     echo "  正在克隆 DSH 仓库..."
     git clone https://github.com/deepseek-ai/deepseek-harness.git "\$DSH_HOME"
@@ -473,6 +520,10 @@ pnpm dsh --help 2>&1 | head -5
 
 function Start-Part3-Config {
     Write-Step "Part 3: 配置 DSH"
+
+    if ($script:WSL_DISTRO -eq "auto" -or $script:WSL_DISTRO -eq "") {
+        throw "WSL 发行版未配置，请先执行 Part 1（不加 -Step 参数）"
+    }
 
     # 3.1 配置 DeepSeek API Key（DPAPI 加密存储）
     Write-Host "[3.1] 配置 DeepSeek API Key（Windows DPAPI 加密存储）..."

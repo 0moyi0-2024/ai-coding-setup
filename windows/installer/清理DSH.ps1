@@ -120,7 +120,7 @@ $selfScript = $MyInvocation.MyCommand.Path
 
 try {
     # 删除当前目录下的所有文件（除了自己）
-    Get-ChildItem $ScriptDir -Exclude $selfScript | ForEach-Object {
+    Get-ChildItem $ScriptDir -Exclude (Split-Path $selfScript -Leaf) | ForEach-Object {
         Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
     Write-Host "  ✅ 已清理安装目录中的文件" -ForegroundColor Green
