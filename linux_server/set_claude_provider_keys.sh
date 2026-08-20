@@ -492,13 +492,6 @@ augment_codex_model_catalog() {
     --argjson custom "${models}" \
     '($custom | unique) as $custom
      | .models as $existing
-     | .models = [
-         .models[] |
-         .supports_search_tool = false |
-         .apply_patch_tool_type = "" |
-         .web_search_tool_type = "" |
-         .support_verbosity = false
-       ]
      | .models += [
          $custom[] as $slug
          | select($existing | map(.slug) | index($slug) | not)
@@ -514,16 +507,16 @@ augment_codex_model_catalog() {
              priority:100,
              additional_speed_tiers:[],
              service_tiers:[],
-             availability_nux:"",
-             upgrade:"",
+             availability_nux:{message:"This model is served through your configured gateway."},
+             upgrade:null,
              base_instructions:"You are Codex, a coding agent.",
              default_reasoning_summary:"none",
              support_verbosity:false,
              truncation_policy:{mode:"tokens",limit:10000},
              supports_parallel_tool_calls:false,
              supports_image_detail_original:false,
-             apply_patch_tool_type:"",
-             web_search_tool_type:"",
+             apply_patch_tool_type:"freeform",
+             web_search_tool_type:"text_and_image",
              context_window:(if ($slug | startswith("claude-")) then 200000
                              elif ($slug | test("^(deepseek|qwen)")) then 1000000
                              else 128000 end),
@@ -533,7 +526,12 @@ augment_codex_model_catalog() {
              effective_context_window_percent:95,
              experimental_supported_tools:[],
              input_modalities:["text"],
-             supports_search_tool:false
+             tool_mode:"code_mode_only",
+             node_repl_disabled:false,
+             node_repl_auto_review_required:false,
+             multi_agent_version:"v2",
+             use_responses_lite:true,
+             supports_search_tool:true
            }
        ]' <<<"${catalog}"
 }
@@ -618,12 +616,51 @@ profile_model_list() {
   esac
 }
 
+codex_provider_block() {
+  local profile=$1 provider name base_url env_key models
+  case "${profile}" in
+    volcano)
+      provider=volcano-ai-gateway; name='Volcano AI Gateway'
+      base_url='https://st8tp3ajl0df3n8b8l8qu.apigateway-cn-beijing.volceapi.com/v1'
+      env_key=VOLCANO_AI_GATEWAY_API_KEY
+      ;;
+    bailian)
+      provider=bailian; name='Alibaba Bailian'
+      base_url='https://dashscope.aliyuncs.com/compatible-mode/v1'
+      env_key=BAILIAN_API_KEY
+      ;;
+    blackai-gpt)
+      provider=blackaicoding-gpt; name='BlackAI Coding (GPT)'
+      base_url='https://www.blackaicoding.com/v1'
+      env_key=BLACKAICODING_GPT_API_KEY
+      ;;
+    blackai-claude)
+      provider=blackaicoding-claude; name='BlackAI Coding (Claude/Grok)'
+      base_url='https://www.blackaicoding.com/v1'
+      env_key=BLACKAICODING_CLAUDE_API_KEY
+      ;;
+    *) die "Unknown Codex profile: ${profile}" ;;
+  esac
+  models=$(profile_model_list "${profile}")
+  [[ "${models}" != '[]' ]] || return 0
+  printf '%s\n' "[model_providers.${provider}]" \
+    "name = \"${name}\"" "base_url = \"${base_url}\"" \
+    "env_key = \"${env_key}\"" 'wire_api = "responses"' "models = ${models}" ''
+}
+
 write_codex_global_config() {
-  # 全局配置：Codex 不指定 --profile 时使用，确保所有场景下都有权限设置
-  local global_config
+  # 全局配置同时注册已配置的 provider，使旧会话无需 profile 也能解析 provider。
+  local global_config profile provider_block
   global_config='# Managed by set_claude_provider_keys.sh — global defaults.'
   global_config+=$'\n'"approval_policy = \"never\""
   global_config+=$'\n'"sandbox_mode = \"danger-full-access\""
+  global_config+=$'\n\n# BEGIN ai-setup global Codex providers'
+  for profile in volcano bailian blackai-gpt blackai-claude; do
+    provider_block=$(codex_provider_block "${profile}")
+    [[ -n "${provider_block}" ]] || continue
+    global_config+=$'\n'"${provider_block}"
+  done
+  global_config+=$'\n# END ai-setup global Codex providers'
   write_secure_file "${CODEX_DIR}/config.toml" "${global_config}"
 }
 

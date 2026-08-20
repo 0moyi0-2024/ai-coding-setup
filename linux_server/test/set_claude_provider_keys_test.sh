@@ -285,6 +285,18 @@ test_codex_profiles() {
     fail "Global Codex config missing approval_policy"
   grep -Fq 'sandbox_mode = "danger-full-access"' <<<"${global_config}" ||
     fail "Global Codex config missing sandbox_mode"
+  grep -Fq '[model_providers.volcano-ai-gateway]' <<<"${global_config}" ||
+    fail "Global Codex config missing Volcano provider"
+  grep -Fq 'env_key = "VOLCANO_AI_GATEWAY_API_KEY"' <<<"${global_config}" ||
+    fail "Global Codex config missing Volcano token variable"
+  grep -Fq '[model_providers.bailian]' <<<"${global_config}" ||
+    fail "Global Codex config missing Bailian provider"
+  grep -Fq '[model_providers.blackaicoding-gpt]' <<<"${global_config}" ||
+    fail "Global Codex config missing BlackAI GPT provider"
+  grep -Fq 'env_key = "BLACKAICODING_GPT_API_KEY"' <<<"${global_config}" ||
+    fail "Global Codex config missing BlackAI GPT token variable"
+  grep -Fq '[model_providers.blackaicoding-claude]' <<<"${global_config}" ||
+    fail "Global Codex config missing BlackAI Claude provider"
   assert_file_mode 600 "${CODEX_DIR}/config.toml" "Global Codex config mode"
   pass "Codex profile rendering"
 }
@@ -315,8 +327,8 @@ test_codex_model_catalog() {
     '[.models[] | select(.slug == "deepseek-v4-flash" and .context_window == 1000000)] | length == 1' \
     "add custom model metadata"
   assert_json "${catalog}" \
-    '[.models[] | select(.slug == "deepseek-v4-pro" and .apply_patch_tool_type == null and .web_search_tool_type == null and .support_verbosity == false and .default_verbosity == null)] | length == 1' \
-    "disable unsupported custom, web search, and verbosity fields"
+    '[.models[] | select(.slug == "deepseek-v4-pro" and .apply_patch_tool_type == "freeform" and .web_search_tool_type == "text_and_image" and .support_verbosity == false and .default_verbosity == null)] | length == 1' \
+    "custom models use valid apply_patch/web_search enum values and no verbosity fields"
 
   rendered=$(CODEX_HOME="${CODEX_DIR}" "${NODE_INSTALL_DIR}/bin/codex" \
     debug models \
@@ -325,7 +337,7 @@ test_codex_model_catalog() {
     "[.models[].slug] | sort == (${VOLCANO_MODELS} | sort)" \
     "Codex loads only Volcano token models"
   assert_json "${rendered}" \
-    '[.models[] | select(.slug == "deepseek-v4-pro" and .apply_patch_tool_type == null and .supports_search_tool == false and .support_verbosity == false)] | length == 1' \
+    '[.models[] | select(.slug == "deepseek-v4-pro" and .apply_patch_tool_type == "freeform" and .supports_search_tool == true and .support_verbosity == false)] | length == 1' \
     "Codex loads compatibility metadata"
   profile_stderr=$(CODEX_HOME="${CODEX_DIR}" "${NODE_INSTALL_DIR}/bin/codex" \
     --profile blackai-gpt debug prompt-input 'metadata check' 2>&1 >/dev/null) ||

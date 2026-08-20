@@ -120,7 +120,8 @@ ccr status
 
 ## 使用 Codex
 
-Codex 为每个 token 使用独立 profile。请带上对应的 `--profile`：
+Codex 会把已配置 token 对应的 provider 注册到全局配置，同时为每个 token 保留独立
+profile。新会话建议带上对应的 `--profile`，以保持模型目录和 token 隔离：
 
 ```bash
 codex --profile volcano
@@ -130,7 +131,8 @@ codex --profile blackai-claude
 ```
 
 没有配置 token 的 profile 不会生成。直接运行不带 profile 的 `codex`，可能看到
-Codex 内置模型，而不是某个 token 的独立模型列表。
+CCR 的默认模型。恢复历史会话时，全局配置可以识别已配置的 provider；如果需要严格
+使用某个 token 的独立模型目录，仍应带上对应的 `--profile`。
 
 ## 查看脚本发现的模型
 
