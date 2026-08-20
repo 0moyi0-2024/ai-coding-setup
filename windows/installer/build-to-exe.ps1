@@ -63,7 +63,7 @@ $exeParams = @{
     company    = "0moyi0-2024"
     product    = "DeepSeek Harness"
     copyright  = "MIT License"
-    version    = "1.0.0.0"
+    version    = "0.0.1.0"
     noConsole  = $false       # 显示控制台窗口
     runtime    = "win10"      # 最低 Windows 10
     x64        = $true        # 64位版本
@@ -98,7 +98,7 @@ if ($buildCleanup -eq "y" -or $buildCleanup -eq "Y") {
             description = "清理 DeepSeek Harness 安装残留"
             company     = "0moyi0-2024"
             product     = "DSH Cleanup"
-            version     = "1.0.0.0"
+            version     = "0.0.1.0"
             noConsole   = $false
             runtime     = "win10"
             x64         = $true
@@ -119,7 +119,7 @@ if ($buildCleanup -eq "y" -or $buildCleanup -eq "Y") {
             description = "DSH 系统托盘管理（右键菜单启动/停止）"
             company     = "0moyi0-2024"
             product     = "DSH Tray"
-            version     = "1.0.0.0"
+            version     = "0.0.1.0"
             noConsole   = $true
             runtime     = "win10"
             x64         = $true

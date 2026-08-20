@@ -283,14 +283,14 @@ function Show-Terminal {
     # 确保日志文件存在
     Invoke-WslHidden "touch $DSH_LOG_FILE 2>/dev/null"
 
-    # 打开新终端窗口，tail -f 实时日志
+    # 打开新终端窗口，tail -f 实时日志，并设置窗口标题为黑鲸鱼
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "wsl.exe"
-    $psi.Arguments = "-d $WSL_DISTRO -- bash -c 'echo \"=== DSH 实时日志 (Ctrl+C 关闭) ===\" && echo \"\" && tail -f $DSH_LOG_FILE'"
+    $psi.Arguments = "-d $WSL_DISTRO -- bash -c 'echo -ne \"\033]0;🐋 DSH 实时日志 v0.0.1\007\"; echo \"=== 🐋 DSH 实时日志 v0.0.1 (Ctrl+C 关闭) ===\"; echo \"\"; tail -f $DSH_LOG_FILE'"
     $psi.UseShellExecute = $true   # 必须用 ShellExecute 才能打开独立窗口
     $script:terminalProcess = [System.Diagnostics.Process]::Start($psi)
 
-    $script:notifyIcon.ShowBalloonTip(2000, "DSH 终端", "日志窗口已打开", [System.Windows.Forms.ToolTipIcon]::Info)
+    $script:notifyIcon.ShowBalloonTip(2000, "DSH 终端", "日志窗口已打开（黑鲸鱼 v0.0.1）", [System.Windows.Forms.ToolTipIcon]::Info)
     Update-Menu
 }
 

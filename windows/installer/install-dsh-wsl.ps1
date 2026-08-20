@@ -447,7 +447,7 @@ echo "环境变量已写入 ~/.bashrc"
     Write-Host "[3.3] 创建 DSH 启动脚本..."
     $startScript = @"
 #!/bin/bash
-# DSH Web 启动脚本
+# 🐋 DSH Web 启动脚本 v0.0.1
 # 用法: bash start-dsh.sh
 
 set -e
@@ -455,7 +455,7 @@ DSH_HOME="$DSH_HOME"
 cd "\$DSH_HOME"
 
 echo "=============================="
-echo "  DeepSeek Harness Web 启动"
+echo "  🐋 DeepSeek Harness Web v0.0.1"
 echo "=============================="
 
 # 检查 API Key
@@ -467,6 +467,8 @@ fi
 
 # 启动 DSH Web
 echo "启动 DSH Web (端口: $DSH_PORT)..."
+echo "浏览器访问: http://localhost:$DSH_PORT"
+echo ""
 pnpm dsh $DSH_PROFILE --port $DSH_PORT
 "@
     $startScript | Invoke-WslSilent "cat > ~/start-dsh.sh && chmod +x ~/start-dsh.sh"
@@ -491,15 +493,21 @@ pnpm dsh $DSH_PROFILE --port $DSH_PORT
     # 3.5 生成 Windows 快捷方式
     Write-Host "[3.5] 生成 Windows 桌面快捷方式..."
     $shortcutPath = "$env:USERPROFILE\Desktop\DSH-Web.lnk"
-    $wslCommand = "wsl -d $WSL_DISTRO -- bash ~/start-dsh.sh"
+
+    # 黑鲸鱼图标（同目录下 icon.ico）
+    $iconPath = Join-Path $ScriptDir "icon.ico"
+    if (-not (Test-Path $iconPath)) { $iconPath = "wsl.exe,0" }
+
     $WScriptShell = New-Object -ComObject WScript.Shell
     $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = "wsl.exe"
-    $shortcut.Arguments = "-d $WSL_DISTRO -- bash ~/start-dsh.sh"
+    # 终端标题设为 "DeepSeek Harness Web v0.0.1"，再执行启动脚本
+    $shortcut.Arguments = "-d $WSL_DISTRO -- bash -c `"echo -ne '\033]0;🐋 DeepSeek Harness Web v0.0.1\007'; exec ~/start-dsh.sh`""
     $shortcut.WorkingDirectory = "%USERPROFILE%"
-    $shortcut.Description = "DeepSeek Harness Web"
+    $shortcut.IconLocation = "$iconPath,0"
+    $shortcut.Description = "🐋 DeepSeek Harness Web v0.0.1 - 双击启动"
     $shortcut.Save()
-    Test-OK "桌面快捷方式已创建: $shortcutPath"
+    Test-OK "桌面快捷方式已创建: $shortcutPath (黑鲸鱼图标)"
 
     # 3.6 验证配置
     Write-Host "[3.6] 验证 DSH 配置..."

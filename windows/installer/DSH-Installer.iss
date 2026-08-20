@@ -5,7 +5,7 @@
 ;       这样安装包内含 .exe 版本，用户无需安装 PowerShell
 
 #define MyAppName "DeepSeek Harness (DSH)"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "0.0.1"
 #define MyAppPublisher "0moyi0-2024"
 #define MyAppURL "https://github.com/0moyi0-2024/ai-coding-setup"
 #define MyAppExeName "DSH-一键安装.exe"
