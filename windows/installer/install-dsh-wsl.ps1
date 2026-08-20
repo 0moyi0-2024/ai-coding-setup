@@ -536,16 +536,13 @@ pnpm dsh $DSH_PROFILE --port $DSH_PORT
     # 3.6 验证配置
     Write-Host "[3.6] 验证 DSH 配置..."
     $verifyConfig = @"
-#!/bin/bash
-set -e
-cd "$DSH_HOME"
-echo "DSH 版本: \$(node -e \"console.log(require('./package.json').version)\")"
+echo "DSH version: \$(node -e 'console.log(require(\"./package.json\").version)')"
 echo "Node.js: \$(node -v)"
 echo "pnpm: \$(pnpm -v)"
-echo "API Key 配置: \$( [ -f .env ] && echo '已配置' || echo '未配置' )"
-echo "DSH 可执行: \$( [ -x node_modules/.bin/dsh ] && echo '是' || echo '否' )"
+if [ -f .env ]; then echo "API Key: configured"; else echo "API Key: NOT configured"; fi
+if [ -x node_modules/.bin/dsh ]; then echo "DSH executable: yes"; else echo "DSH executable: no"; fi
 "@
-    $verifyOutput = Invoke-WslSilent $verifyConfig
+    $verifyOutput = Invoke-WslSilent "cd $DSH_HOME; $verifyConfig"
     Write-Host ""
     Write-Host "  配置摘要:"
     $verifyOutput -split "`n" | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
