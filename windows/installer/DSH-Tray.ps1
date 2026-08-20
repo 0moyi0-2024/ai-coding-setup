@@ -33,6 +33,7 @@ $script:isRunning = $false
 $script:notifyIcon = $null
 $script:contextMenu = $null
 $script:terminalProcess = $null   # 日志终端窗口进程
+$script:browserProcess = $null    # 浏览器窗口进程
 $DSH_LOG_FILE = "/tmp/dsh.log"    # DSH 日志文件路径
 
 # ===== WSL 辅助函数 =====
@@ -173,20 +174,46 @@ function Stop-DSH {
 }
 
 function Open-Browser {
+    <# 启动浏览器并跟踪进程 #>
     $url = "http://localhost:$DSH_PORT"
     try {
         $request = [System.Net.WebRequest]::Create($url)
         $request.Timeout = 2000
         $response = $request.GetResponse()
         $response.Close()
-        Start-Process $url
+        $script:browserProcess = Start-Process $url -PassThru
+        $script:notifyIcon.ShowBalloonTip(2000, "DSH", "浏览器已打开 $url", [System.Windows.Forms.ToolTipIcon]::Info)
+        Update-Menu
     } catch {
         if (-not $script:isRunning) {
             Start-DSH
             Start-Sleep -Seconds 5
         }
-        Start-Process $url
+        $script:browserProcess = Start-Process $url -PassThru
+        Update-Menu
     }
+}
+
+function Close-Browser {
+    <# 关闭浏览器窗口 #>
+    if ($script:browserProcess -and -not $script:browserProcess.HasExited) {
+        $script:browserProcess.Kill()
+        $script:browserProcess = $null
+        $script:notifyIcon.ShowBalloonTip(2000, "DSH", "浏览器已关闭", [System.Windows.Forms.ToolTipIcon]::Info)
+    } else {
+        $script:browserProcess = $null
+        $script:notifyIcon.ShowBalloonTip(1000, "DSH", "浏览器未打开", [System.Windows.Forms.ToolTipIcon]::Info)
+    }
+    Update-Menu
+}
+
+function Test-IsBrowserOpen {
+    <# 检测浏览器是否打开 #>
+    if ($script:browserProcess -and -not $script:browserProcess.HasExited) {
+        return $true
+    }
+    $script:browserProcess = $null
+    return $false
 }
 
 # ===== 终端显示/隐藏 =====
@@ -253,10 +280,18 @@ function Update-Menu {
         $script:contextMenu.Items.Add($startItem)
     }
 
-    $openItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $openItem.Text = "🌐 打开 Web 界面"
-    $openItem.Add_Click({ Open-Browser })
-    $script:contextMenu.Items.Add($openItem)
+    # ====== Web 界面（打开/关闭智能切换）======
+    if (Test-IsBrowserOpen) {
+        $closeWeb = New-Object System.Windows.Forms.ToolStripMenuItem
+        $closeWeb.Text = "🌐 关闭 Web 界面"
+        $closeWeb.Add_Click({ Close-Browser })
+        $script:contextMenu.Items.Add($closeWeb)
+    } else {
+        $openWeb = New-Object System.Windows.Forms.ToolStripMenuItem
+        $openWeb.Text = "🌐 打开 Web 界面"
+        $openWeb.Add_Click({ Open-Browser })
+        $script:contextMenu.Items.Add($openWeb)
+    }
 
     # ====== 终端显示/隐藏 ======
     if ($script:terminalProcess -and -not $script:terminalProcess.HasExited) {
@@ -303,6 +338,7 @@ function Update-Menu {
     $exitItem.Text = "❌ 退出"
     $exitItem.Add_Click({
         Hide-Terminal
+        Close-Browser
         Stop-DSH
         $script:notifyIcon.Visible = $false
         [System.Windows.Forms.Application]::Exit()
@@ -322,7 +358,11 @@ function Show-Tray {
     $script:notifyIcon.ContextMenuStrip = $script:contextMenu
 
     $script:notifyIcon.Add_DoubleClick({
-        Open-Browser
+        if (Test-IsBrowserOpen) {
+            Close-Browser
+        } else {
+            Open-Browser
+        }
     })
 
     $script:notifyIcon.Add_Click({
