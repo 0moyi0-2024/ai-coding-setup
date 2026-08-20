@@ -42,7 +42,7 @@ trap {
 # 安装脚本专属配置（覆盖共享配置中需要改的）
 $WSL_DISTRO     = "auto"                   # "auto" = 自动检测（覆盖 config.ps1 的 ""）
 $WSL_USER       = "dsh"                    # WSL 内新建用户
-$NODE_VERSION   = "26"                     # Node.js 主版本
+$NODE_VERSION   = "22"                     # Node.js LTS 主版本
 
 # =============================================================================
 # 自动检测函数
@@ -151,7 +151,7 @@ function Invoke-WslSilent {
 # =============================================================================
 
 function Start-Part1-WSL {
-    Write-Step "Part 1: 安装 WSL + Ubuntu 24.04"
+    Write-Step "Part 1: 安装 WSL + Ubuntu"
 
     # 1.1 管理员权限由 #requires -RunAsAdministrator 保证
     Write-Host "[1.1] 管理员权限 ✅" -ForegroundColor Green
@@ -185,13 +185,13 @@ function Start-Part1-WSL {
         # 1.4 启用 WSL 功能
         Write-Host "[1.4] 启用 WSL 功能..."
         Write-Host "  正在启用 VirtualMachinePlatform 和 WSL..."
-        $dismResult = dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart 2>&1
-        if ($dismResult -match "Error|失败") {
-            Write-Host "  VirtualMachinePlatform 启用失败" -ForegroundColor Red
+        dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  VirtualMachinePlatform 启用失败 (exit code: $LASTEXITCODE)" -ForegroundColor Red
         }
-        $dismResult = dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart 2>&1
-        if ($dismResult -match "Error|失败") {
-            Write-Host "  WSL 功能启用失败" -ForegroundColor Red
+        dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  WSL 功能启用失败 (exit code: $LASTEXITCODE)" -ForegroundColor Red
         }
         Write-Host "  WSL 功能已启用" -ForegroundColor Green
 
@@ -231,8 +231,10 @@ function Start-Part1-WSL {
 
     # 检查是否已有同名发行版（精确匹配，避免子串误判）
     $dshExists = (wsl -l -q 2>&1) -split "`n" | Where-Object { $_.Trim() -eq $dshName }
+    $isNewInstall = $true
     if ($dshExists) {
         Write-Host "  $dshName 已存在，跳过" -ForegroundColor Green
+        $isNewInstall = $false
     } else {
         $allDistros = (wsl -l -q 2>&1) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
         $userHasTarget = $allDistros -contains $targetName
@@ -379,7 +381,15 @@ echo "default=dsh" >> /etc/wsl.conf
     $script:WSL_DISTRO = $dshName
     $global:WSL_DISTRO = $dshName
     $WSL_DISTRO = $dshName
-    Test-OK "WSL 发行版已创建: $dshName（你原有的 $targetName 完全未动）"
+    if ($isNewInstall) {
+        if ($userHasTarget) {
+            Test-OK "WSL 发行版已创建: $dshName（你原有的 $targetName 完全未动）"
+        } else {
+            Test-OK "WSL 发行版已创建: $dshName"
+        }
+    } else {
+        Test-OK "WSL 发行版已就绪: $dshName"
+    }
 
     # 1.7 验证 WSL 可用
     Write-Host "[1.7] 验证 WSL 可用性..."
