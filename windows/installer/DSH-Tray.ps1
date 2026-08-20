@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     DeepSeek Harness 系统托盘管理器 v0.0.1
 .DESCRIPTION

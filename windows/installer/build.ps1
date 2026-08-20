@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     DSH 一键构建脚本 v0.0.1
 .DESCRIPTION

@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 title 🐋 DeepSeek Harness Web v0.0.1
 chcp 65001 >nul
 

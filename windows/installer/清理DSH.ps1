@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     DeepSeek Harness (DSH) 安装失败清理工具
 .DESCRIPTION
