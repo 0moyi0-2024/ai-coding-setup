@@ -125,8 +125,6 @@ $WSL_DISTRO = "Ubuntu-22.04"   # 手动指定，跳过自动检测
 
 ## 相关脚本
 
-<<<<<<< HEAD
+## 相关脚本
+
 - [set_claude_provider_keys.sh](../linux_server/set_claude_provider_keys.sh) — 容器内 AI 编程工具链配置（Claude Code + Codex + CCR）
-=======
-- [set_claude_provider_keys.sh](../set_claude_provider_keys.sh) — 容器内 AI 编程工具链配置（Claude Code + Codex + CCR）
->>>>>>> d2259fa (feat: 新增 windows/install-dsh-wsl.ps1 Windows+WSL 一键安装 DSH 脚本)
