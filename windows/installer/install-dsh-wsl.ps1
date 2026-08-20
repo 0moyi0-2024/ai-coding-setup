@@ -36,7 +36,7 @@ trap {
         try { wsl -d $global:WSL_DISTRO -- bash -c "rm -f '$global:DSH_ENV_FILE' 2>/dev/null" 2>$null } catch {}
         Write-Host "  已清理临时 .env" -ForegroundColor Yellow
     }
-    break
+    # 不 break，让错误继续传播到 try/catch
 }
 
 # 安装脚本专属配置（覆盖共享配置中需要改的）
@@ -87,7 +87,7 @@ function Get-BestWslDistro {
                 if ($_ -match "Ubuntu") { Write-Host "    $_" -ForegroundColor Gray }
             }
             foreach ($candidate in $candidates) {
-                if ($onlineDistros -match $candidate) {
+                if ($onlineDistros -match [regex]::Escape($candidate)) {
                     $selected = $candidate
                     break
                 }
