@@ -13,12 +13,15 @@ param(
 $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# ===== 配置（必须与 install-dsh-wsl.ps1 一致） =====
-$DSH_HOME     = "/home/dsh/dsh"    # DSH 在 WSL 内的路径
+# 加载共享配置
+. (Join-Path $ScriptDir "config.ps1")
+
+# 本地变量
+$DSH_HOME     = $global:DSH_HOME
 $AGENT_DIR    = "/agent"           # set_claude_provider_keys.sh 的安装目录
 $DesktopPath  = [Environment]::GetFolderPath("Desktop")
 
-# 自动检测 WSL 默认发行版（安装脚本会设为默认，适配 22.04/24.04）
+# 自动检测 WSL 默认发行版
 try {
     $defaultDistro = wsl -l -q 2>&1 | Where-Object { $_ -match "Ubuntu" } | Select-Object -First 1
     if (-not $defaultDistro) { $defaultDistro = "Ubuntu" }

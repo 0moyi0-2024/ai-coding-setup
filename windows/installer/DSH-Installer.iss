@@ -48,13 +48,27 @@ Source: "DSH-一键安装.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "清理DSH.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; 托盘管理器（编译后的 exe，像 QQ/微信一样在右下角显示图标）
 Source: "DSH-Tray.exe"; DestDir: "{app}"; Flags: ignoreversion
-; 源码备份（可选，供开发者查看）
+
+; 源码备份（供开发者查看）
 Source: "install-dsh-wsl.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
-; DSH-Tray 源码备份
 Source: "DSH-Tray.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
-; DPAPI 加密模块（exe 同目录和 source 目录都需要）
+Source: "清理DSH.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
+
+; 共享模块（exe 运行时需要，必须与 exe 同目录）
+Source: "config.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dsh-crypto.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dsh-wsl.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dsh-service.ps1"; DestDir: "{app}"; Flags: ignoreversion
+
+; 源码目录也放一份（方便开发调试）
+Source: "config.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
 Source: "dsh-crypto.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
+Source: "dsh-wsl.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
+Source: "dsh-service.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
+
+; 图标
+Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
+
 ; 启动 Web 快捷方式（传统终端窗口模式）
 Source: "DSH-Web-启动.bat"; DestDir: "{app}"; Flags: ignoreversion
 ; 卸载提示脚本

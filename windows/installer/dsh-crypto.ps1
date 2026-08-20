@@ -2,9 +2,8 @@
 # DSH 加密存储模块 - 使用 Windows DPAPI (Data Protection API)
 # 密钥与当前 Windows 用户绑定，其他用户/机器无法解密
 # 密文 Base64 存到 %APPDATA%\DSH\tokens.enc
+# 依赖: config.ps1（提供 $global:DshTokenFile）
 # ============================================================
-
-$global:DshTokenFile = Join-Path $env:APPDATA "DSH\tokens.enc"
 
 function Ensure-DshConfigDir {
     $dir = Split-Path $global:DshTokenFile -Parent

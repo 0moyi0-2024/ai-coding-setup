@@ -25,13 +25,13 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $LogFile = Join-Path $ScriptDir "dsh-install-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 
-# ---- 配置变量（按需修改） ----
-$WSL_DISTRO     = "auto"                   # "auto" = 自动检测最新 Ubuntu LTS 版本
-$WSL_USER       = "dsh"                   # WSL 内新建用户（留空则用已有用户）
-$DSH_HOME       = "/home/$WSL_USER/dsh"   # DSH 安装位置
-$NODE_VERSION   = "26"                    # Node.js 主版本
-$DSH_PORT       = 3080                    # DSH Web 端口
-$DSH_PROFILE    = "web"                   # DSH 启动 profile
+# 加载共享配置（port, paths, version 等）
+. (Join-Path $ScriptDir "config.ps1")
+
+# 安装脚本专属配置（覆盖共享配置中需要改的）
+$WSL_DISTRO     = "auto"                   # "auto" = 自动检测（覆盖 config.ps1 的 ""）
+$WSL_USER       = "dsh"                    # WSL 内新建用户
+$NODE_VERSION   = "26"                     # Node.js 主版本
 
 # =============================================================================
 # 自动检测函数
