@@ -1,102 +1,82 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <!-- DeepSeek Black Whale Icon -->
-  <!-- Background circle (deep blue gradient for "deep seek") -->
   <defs>
-    <radialGradient id="bg" cx="40%" cy="35%" r="65%">
+    <!-- 鲸鱼身体渐变 -->
+    <linearGradient id="whale" x1="20%" y1="10%" x2="90%" y2="100%">
       <stop offset="0%" stop-color="#1e293b"/>
       <stop offset="100%" stop-color="#0f172a"/>
-    </radialGradient>
-    <linearGradient id="whale" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1e293b"/>
-      <stop offset="50%" stop-color="#0f172a"/>
-      <stop offset="100%" stop-color="#020617"/>
     </linearGradient>
-    <radialGradient id="eye" cx="50%" cy="40%" r="50%">
+    <!-- 科技蓝发光 -->
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
       <stop offset="0%" stop-color="#38bdf8"/>
-      <stop offset="60%" stop-color="#0ea5e9"/>
-      <stop offset="100%" stop-color="#0284c7"/>
+      <stop offset="70%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#0369a1"/>
     </radialGradient>
-    <filter id="glow">
-      <feGaussianBlur stdDeviation="2" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
+    <!-- 柔和背景 -->
+    <radialGradient id="bg" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </radialGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="2.5"/></filter>
   </defs>
 
-  <!-- Dark circle background -->
-  <circle cx="128" cy="128" r="120" fill="url(#bg)"/>
-  <!-- Subtle ring accent -->
-  <circle cx="128" cy="128" r="118" fill="none" stroke="#334155" stroke-width="2"/>
+  <!-- 深色背景（无边框无圆环） -->
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
 
-  <!-- Whale body (stylized black/orca style) -->
-  <g transform="translate(128,132)">
-    <!-- Main body -->
-    <path d="
-      M -75 10
-      C -75 -15, -55 -45, -20 -50
-      C -5 -52, 15 -48, 30 -42
-      C 48 -35, 62 -25, 72 -10
-      C 78 0, 75 10, 65 18
-      C 50 28, 30 32, 5 30
-      C -20 28, -50 22, -70 15
-      Z" fill="url(#whale)" stroke="#334155" stroke-width="1"/>
-
-    <!-- White belly -->
-    <path d="
-      M -65 10
-      C -55 15, -30 20, -5 22
-      C 20 24, 45 20, 60 12
-      C 55 20, 35 28, 10 28
-      C -15 28, -40 22, -55 15
-      Z" fill="#e2e8f0" opacity="0.9"/>
-
-    <!-- Tail fluke -->
-    <path d="
-      M -75 8
-      C -85 0, -98 -8, -105 -18
-      C -100 -10, -95 -2, -88 5
-      M -78 12
-      C -88 18, -102 25, -108 32
-      C -100 22, -92 16, -82 10"
-      fill="#0f172a" stroke="#334155" stroke-width="1.5" stroke-linejoin="round"/>
-
-    <!-- Dorsal fin -->
-    <path d="
-      M 10 -42
-      C 15 -58, 25 -65, 30 -52
-      C 28 -45, 22 -38, 15 -36 Z"
-      fill="#0f172a" stroke="#334155" stroke-width="1"/>
-
-    <!-- Pectoral fin -->
-    <path d="
-      M -15 12
-      C -22 22, -30 35, -20 38
-      C -10 35, -2 25, 5 15"
-      fill="#0f172a" stroke="#334155" stroke-width="1"/>
-
-    <!-- Eye (glowing blue - AI/tech feel) -->
-    <circle cx="35" cy="-22" r="6" fill="url(#eye)" filter="url(#glow)"/>
-    <circle cx="37" cy="-24" r="2" fill="#e0f2fe"/>
-
-    <!-- Blowhole spout/water spray (subtle tech feel) -->
-    <g opacity="0.6">
-      <path d="M 0 -50 C -2 -60, -8 -68, -5 -75" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.7"/>
-      <path d="M 5 -50 C 8 -62, 15 -72, 12 -80" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.5"/>
-      <path d="M -5 -50 C -10 -58, -15 -65, -18 -70" stroke="#38bdf8" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.4"/>
-      <circle cx="-5" cy="-75" r="1.5" fill="#38bdf8" opacity="0.8"/>
-      <circle cx="12" cy="-80" r="1.5" fill="#38bdf8" opacity="0.6"/>
-      <circle cx="-18" cy="-70" r="1" fill="#38bdf8" opacity="0.5"/>
+  <g transform="translate(128,130)">
+    <!-- 喷水 - 科技蓝光点（简洁） -->
+    <g opacity="0.9">
+      <circle cx="-2" cy="-55" r="2.5" fill="#38bdf8" filter="url(#blur)"/>
+      <circle cx="-8" cy="-60" r="1.8" fill="#7dd3fc" opacity="0.8"/>
+      <circle cx="5" cy="-62" r="1.5" fill="#7dd3fc" opacity="0.7"/>
+      <!-- 水柱线条（更简洁） -->
+      <path d="M-2 -48 C-4 -52 -6 -56 -8 -59" stroke="#38bdf8" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.6"/>
+      <path d="M2 -48 C3 -53 5 -58 5 -61" stroke="#38bdf8" stroke-width="1.2" stroke-linecap="round" fill="none" opacity="0.5"/>
     </g>
 
-    <!-- Small circuit/tech lines near head (subtle AI hint) -->
-    <g stroke="#38bdf8" stroke-width="1" fill="none" opacity="0.4">
-      <path d="M 48 -18 L 58 -20 L 62 -15"/>
-      <circle cx="62" cy="-15" r="1.5" fill="#38bdf8"/>
-      <path d="M 50 -10 L 60 -8 L 63 -3"/>
-      <circle cx="63" cy="-3" r="1.5" fill="#38bdf8"/>
-    </g>
+    <!-- 鲸鱼身体 - 极简流畅线条 -->
+    <path d="
+      M -78 5
+      C -75 -18, -48 -48, -8 -50
+      C 20 -50, 45 -42, 62 -28
+      C 75 -18, 78 -2, 65 12
+      C 48 25, 20 28, -10 26
+      C -40 23, -65 15, -78 8 Z"
+      fill="url(#whale)"/>
+
+    <!-- 腹部 - 极简高光（小面积，更清爽） -->
+    <path d="
+      M -62 8
+      C -40 18, -5 22, 28 16
+      C 20 22, -5 26, -30 23
+      C -48 20, -58 15, -62 8 Z"
+      fill="#cbd5e1" opacity="0.5"/>
+
+    <!-- 背鳍 - 锐利三角，干练 -->
+    <path d="M 5 -48 C 12 -62, 24 -65, 26 -50 C 22 -42, 14 -38, 5 -40 Z"
+          fill="#0f172a"/>
+
+    <!-- 胸鳍 -->
+    <path d="M -10 10 C -20 20, -32 32, -22 36 C -12 34, -2 22, 8 12 Z"
+          fill="#0f172a"/>
+
+    <!-- 尾鳍 - 简洁双叶 -->
+    <path d="M -78 5 C -90 -3, -102 -12, -108 -22 L -92 -8 M -80 8 C -92 15, -105 22, -110 30 L -95 14"
+          stroke="#0f172a" stroke-width="4" stroke-linecap="round" fill="none"/>
+
+    <!-- 眼睛 - 科技蓝光（点睛） -->
+    <circle cx="38" cy="-28" r="5" fill="url(#glow)"/>
+    <circle cx="40" cy="-30" r="1.8" fill="#e0f2fe"/>
+    <!-- 眼睛光晕 -->
+    <circle cx="38" cy="-28" r="8" fill="#38bdf8" opacity="0.15"/>
+
+    <!-- 科技感数据点（极简，不多） -->
+    <circle cx="55" cy="-15" r="1.5" fill="#38bdf8" opacity="0.7"/>
+    <path d="M55 -15 L65 -18" stroke="#38bdf8" stroke-width="1" opacity="0.5"/>
+    <circle cx="58" cy="-8" r="1" fill="#38bdf8" opacity="0.5"/>
   </g>
 
-  <!-- "DSH" text at bottom -->
-  <text x="128" y="225" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif"
-        font-size="28" font-weight="700" fill="#e2e8f0" letter-spacing="4">DSH</text>
+  <!-- DSH 文字 - 极简无衬线，更小更清爽 -->
+  <text x="128" y="232" text-anchor="middle"
+        font-family="-apple-system, 'Segoe UI', Arial, sans-serif"
+        font-size="22" font-weight="600" fill="#94a3b8" letter-spacing="6">DSH</text>
 </svg>
