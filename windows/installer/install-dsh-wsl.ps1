@@ -124,14 +124,6 @@ function Test-FAIL {
     Add-Content -Path $LogFile -Value "  [FAIL] $Message"
 }
 
-function Invoke-Wsl {
-    param([string]$Command)
-    wsl -d $WSL_DISTRO -- bash -c $Command
-    if ($LASTEXITCODE -ne 0) {
-        throw "WSL 命令失败 (exit=$LASTEXITCODE): $Command"
-    }
-}
-
 function Invoke-WslSilent {
     param([string]$Command)
     $result = wsl -d $WSL_DISTRO -- bash -c $Command 2>&1
@@ -557,6 +549,12 @@ echo "DSH 可执行: \$( [ -x node_modules/.bin/dsh ] && echo '是' || echo '否
     Write-Host ""
     Write-Host "  配置摘要:"
     $verifyOutput -split "`n" | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+
+    # 验证完成后清理临时 .env（明文不残留，后续由托盘管理器动态管理）
+    Write-Host ""
+    Write-Host "  清理临时 .env 文件..."
+    Invoke-WslSilent "rm -f '$DSH_HOME/.env' 2>/dev/null && echo CLEANED" | Out-Null
+    Write-Host "  ✅ .env 已清理（Token 已加密保存在 Windows，托盘启动时自动解密）" -ForegroundColor Green
 
     Write-Host ""
     Write-Host "========== Part 3 完成: DSH 配置成功 ==========" -ForegroundColor Green

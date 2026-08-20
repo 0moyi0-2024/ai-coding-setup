@@ -52,6 +52,9 @@ Source: "DSH-Tray.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "install-dsh-wsl.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
 ; DSH-Tray 源码备份
 Source: "DSH-Tray.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
+; DPAPI 加密模块（exe 同目录和 source 目录都需要）
+Source: "dsh-crypto.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dsh-crypto.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
 ; 启动 Web 快捷方式（传统终端窗口模式）
 Source: "DSH-Web-启动.bat"; DestDir: "{app}"; Flags: ignoreversion
 ; 卸载提示脚本
@@ -78,7 +81,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Filename: "{app}\{#MyAppExeName}"; Description: "立即开始安装 DSH"; Flags: postinstall nowait skipifsilent shellexec
 
 [UninstallRun]
-Filename: "{cmd}"; Parameters: "/c echo 卸载完成。DSH 安装目录 {app} 中的文件已删除。如果 WSL Ubuntu 不再需要，请运行 清理DSH.exe 或手动执行 wsl --unregister Ubuntu-24.04"; Flags: runhidden
+Filename: "{cmd}"; Parameters: "/c echo 卸载完成。DSH 安装目录 {app} 中的文件已删除。如果 WSL 发行版不再需要，请运行 清理DSH.exe 自动清理"; Flags: runhidden
 
 [Code]
 function InitializeSetup: Boolean;

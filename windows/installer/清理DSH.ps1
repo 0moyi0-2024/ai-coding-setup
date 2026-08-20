@@ -14,10 +14,18 @@ $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # ===== 配置（必须与 install-dsh-wsl.ps1 一致） =====
-$WSL_DISTRO   = "Ubuntu-24.04"     # 脚本自动检测到的实际发行版
 $DSH_HOME     = "/home/dsh/dsh"    # DSH 在 WSL 内的路径
 $AGENT_DIR    = "/agent"           # set_claude_provider_keys.sh 的安装目录
 $DesktopPath  = [Environment]::GetFolderPath("Desktop")
+
+# 自动检测 WSL 默认发行版（安装脚本会设为默认，适配 22.04/24.04）
+try {
+    $defaultDistro = wsl -l -q 2>&1 | Where-Object { $_ -match "Ubuntu" } | Select-Object -First 1
+    if (-not $defaultDistro) { $defaultDistro = "Ubuntu" }
+} catch {
+    $defaultDistro = "Ubuntu"
+}
+$WSL_DISTRO = $defaultDistro.Trim()
 
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════╗" -ForegroundColor Red
@@ -132,6 +140,27 @@ try {
     Write-Host "  ⏭️  清理失败，可手动在防火墙中删除" -ForegroundColor Gray
 }
 
+# ===== 额外2：清理加密 Token 文件 =====
+Write-Host "[额外] 清理加密 Token 文件..."
+$tokenFile = Join-Path $env:APPDATA "DSH\tokens.enc"
+if (Test-Path $tokenFile) {
+    if ($Force) {
+        Remove-Item $tokenFile -Force
+        Write-Host "  ✅ 已删除加密 Token 文件" -ForegroundColor Green
+    } else {
+        Write-Host "  ⚠️  发现加密 Token 文件: $tokenFile" -ForegroundColor Yellow
+        $cleanToken = Read-Host "  是否删除加密 Token 文件？(y/N)"
+        if ($cleanToken -eq "y" -or $cleanToken -eq "Y") {
+            Remove-Item $tokenFile -Force
+            Write-Host "  ✅ 已删除加密 Token 文件" -ForegroundColor Green
+        } else {
+            Write-Host "  ⏭️  保留加密 Token 文件" -ForegroundColor Gray
+        }
+    }
+} else {
+    Write-Host "  ⏭️  加密 Token 文件不存在，跳过" -ForegroundColor Gray
+}
+
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════╗" -ForegroundColor Green
 Write-Host "║     清理完成！                                ║" -ForegroundColor Green
@@ -140,3 +169,4 @@ Write-Host ""
 Write-Host "如果 WSL 功能本身已不需要，可以手动关闭："
 Write-Host "  PowerShell(管理员): dism /online /disable-feature /featurename:Microsoft-Windows-Subsystem-Linux"
 Write-Host ""
+Write-Host "提示：加密的 Token 文件在 %APPDATA%\DSH\tokens.enc，如需要可手动删除"

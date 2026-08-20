@@ -86,8 +86,7 @@ function Write-EnvFile {
         $k = $p.EnvKey
         if ($tokens.ContainsKey($k) -and $tokens[$k]) {
             $val = ConvertTo-PlainText $tokens[$k]
-            $escaped = $val -replace "'", "'\''"
-            $lines += "$k='$escaped'"
+            $lines += "$k=$val"
         }
     }
     if ($lines.Count -eq 0) {
