@@ -204,7 +204,7 @@ function Start-Part1-WSL {
     # 1.6 安装全新的 Ubuntu 并命名为 Ubuntu-版本-日期
     Write-Host "[1.6] 安装全新 Ubuntu（不影响你原有系统）..."
 
-    # 生成动态名称: Ubuntu-24.04-20260821
+    # 生成目标名称: Ubuntu-24.04-20260821
     $ubuntuVer = if ($script:WSL_DISTRO -match "(\d+\.\d+)") { $matches[1] } else { "24.04" }
     $dateStr = Get-Date -Format "yyyyMMdd"
     $dshName = "Ubuntu-${ubuntuVer}-${dateStr}"
@@ -214,23 +214,42 @@ function Start-Part1-WSL {
     if ($dshExists) {
         Write-Host "  $dshName 已存在，跳过" -ForegroundColor Green
     } else {
-        # 根据版本选择 rootfs 下载地址
-        $codename = if ($ubuntuVer -eq "24.04") { "noble" } else { "jammy" }
-        $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/${codename}/current/ubuntu-${codename}-wsl-amd64-rootfs.tar.gz"
-        $rootfsFile = Join-Path $ScriptDir "_ubuntu_rootfs.tar.gz"
-
-        Write-Host "  正在下载全新 Ubuntu-${ubuntuVer} rootfs（约 500MB）..."
-        try {
-            Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfsFile -UseBasicParsing
-        } catch {
-            throw "下载 Ubuntu rootfs 失败，请检查网络: $_"
+        # 选一个不和已有系统冲突的版本来安装
+        $allDistros = wsl -l -q 2>&1
+        if ($allDistros -match "Ubuntu-${ubuntuVer}") {
+            # 目标版本已存在，用另一个版本做中转
+            $tempVer = if ($ubuntuVer -eq "24.04") { "22.04" } else { "24.04" }
+            Write-Host "  已有 Ubuntu-${ubuntuVer}，先安装 Ubuntu-${tempVer} 做中转..."
+        } else {
+            $tempVer = $ubuntuVer
         }
-        Write-Host "  下载完成" -ForegroundColor Green
+        $tempName = "Ubuntu-${tempVer}"
 
-        # 导入为 dsh_版本_日期
+        # 安装临时发行版
+        $tempExists = wsl -l -q 2>&1 | Select-String $tempName
+        if (-not $tempExists) {
+            Write-Host "  正在下载 Ubuntu-${tempVer}（约 500MB，首次需几分钟）..."
+            wsl --install -d $tempName --no-launch 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Ubuntu-${tempVer} 安装失败，请检查网络" }
+        }
+
+        # 导出 → 导入为目标名称
         Write-Host "  导入为 $dshName..."
-        wsl --import $dshName "C:\WSL\$dshName" $rootfsFile 2>&1 | Out-Null
-        Remove-Item $rootfsFile -Force -ErrorAction SilentlyContinue
+        $tempTar = Join-Path $ScriptDir "_wsl_temp.tar"
+        wsl --export $tempName $tempTar 2>&1 | Out-Null
+        wsl --import $dshName "C:\WSL\$dshName" $tempTar 2>&1 | Out-Null
+        Remove-Item $tempTar -Force -ErrorAction SilentlyContinue
+
+        # 删除临时发行版（只删中转的，不动用户原有系统）
+        if (-not ($allDistros -match $tempName)) {
+            wsl --unregister $tempName 2>&1 | Out-Null
+        }
+
+        # 如果中转版本 ≠ 期望版本，更新 $dshName 反映实际版本
+        if ($tempVer -ne $ubuntuVer) {
+            $dshName = "Ubuntu-${tempVer}-${dateStr}"
+            Write-Host "  注意: 目标版本 ${ubuntuVer} 已存在，实际安装 ${tempVer}" -ForegroundColor Yellow
+        }
 
         # 创建用户 dsh（密码 123456），设 sudo 权限，设默认用户
         Write-Host "  创建 dsh 用户（密码: 123456）..."
