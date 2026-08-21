@@ -1,10 +1,11 @@
-﻿<#
+<#
 .SYNOPSIS
     DeepSeek Harness (DSH) 安装失败清理工具
 .DESCRIPTION
     如果安装过程中断或失败，运行此脚本清理所有残留文件
     包括：WSL Ubuntu 发行版、DSH 源码、环境变量、快捷方式等
 #>
+#requires -Version 7
 
 param(
     [switch]$Force         # 跳过确认，直接清理

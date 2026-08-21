@@ -5,6 +5,7 @@
     自动完成：编译 ps1→exe → 编译 Inno Setup → 输出安装包
     用法: .\build.ps1 [-SkipInnoSetup]
 #>
+#requires -Version 7
 
 param([switch]$SkipInnoSetup)
 

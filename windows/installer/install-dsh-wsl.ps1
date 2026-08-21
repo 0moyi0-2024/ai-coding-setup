@@ -6,7 +6,14 @@
 #     - Windows 11 → Ubuntu-24.04（最新 LTS）
 #     - Windows 10 → Ubuntu-22.04（兼容性最稳）
 #
-#  用法（以管理员身份运行 PowerShell）：
+#  ⚡ 系统要求
+#     - Windows 10 Build 19041+ 或 Windows 11
+#     - 管理员权限
+#     - PowerShell 7+（不是 Windows 自带的 PowerShell 5.1）
+#       安装 PS7: winget install --id Microsoft.PowerShell --source winget
+#       然后搜索"PowerShell 7"（黑色图标），以管理员身份打开
+#
+#  用法（以管理员身份运行 PowerShell 7）：
 #    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 #    .\install-dsh-wsl.ps1
 #
@@ -16,6 +23,7 @@
 #    .\install-dsh-wsl.ps1 -Step 3    # 只配置 DSH
 # =============================================================================
 
+#requires -Version 7
 #requires -RunAsAdministrator
 
 param(
