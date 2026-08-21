@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 #  DeepSeek Harness (DSH) 一键安装脚本 — Windows + WSL
 #  从零到一：自动检测 Windows 版本 → 安装 WSL → 安装 DSH → 配置 → 测试验证
 #
@@ -499,12 +499,12 @@ function Start-Part2-DSH {
 #!/bin/bash
 set -e
 if command -v node &>/dev/null; then
-    echo "  Node.js 已安装: \`$(node -v)"
+    echo "  Node.js 已安装: `$(node -v)"
 else
     echo "  正在安装 Node.js v$NODE_VERSION..."
     curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | sudo -E bash - 2>&1 | tail -1
     sudo apt install -y -qq nodejs 2>&1 | tail -1
-    echo "  Node.js 安装完成: \`$(node -v)"
+    echo "  Node.js 安装完成: `$(node -v)"
 fi
 "@
     $nodeInstall | Invoke-WslSilent
@@ -517,11 +517,11 @@ fi
 #!/bin/bash
 set -e
 if command -v pnpm &>/dev/null; then
-    echo "  pnpm 已安装: \`$(pnpm -v)"
+    echo "  pnpm 已安装: `$(pnpm -v)"
 else
     echo "  启用 Corepack..."
     sudo corepack enable 2>&1
-    echo "  pnpm 已启用: \`$(pnpm -v)"
+    echo "  pnpm 已启用: `$(pnpm -v)"
 fi
 "@
     $pnpmInstall | Invoke-WslSilent
@@ -536,7 +536,7 @@ set -e
 if ! command -v git &>/dev/null; then
     sudo apt install -y -qq git
 fi
-echo "git \`$(git --version | awk '{print \$3}')"
+echo "git `$(git --version | awk '{print `$3}')"
 "@
     $gitVersion = Invoke-WslSilent $gitCheck
     Test-OK "git: $gitVersion"
@@ -547,18 +547,18 @@ echo "git \`$(git --version | awk '{print \$3}')"
 #!/bin/bash
 set -e
 DSH_HOME="$DSH_HOME"
-if [ -d "\$DSH_HOME/.git" ]; then
+if [ -d "`$DSH_HOME/.git" ]; then
     echo "  DSH 仓库已存在，更新..."
-    cd "\$DSH_HOME"
+    cd "`$DSH_HOME"
     git fetch origin
-    git pull origin \`$(git rev-parse --abbrev-ref HEAD)
+    git pull origin `$(git rev-parse --abbrev-ref HEAD)
 else
     echo "  正在克隆 DSH 仓库..."
-    git clone https://github.com/deepseek-ai/deepseek-harness.git "\$DSH_HOME"
+    git clone https://github.com/deepseek-ai/deepseek-harness.git "`$DSH_HOME"
 fi
-echo "  DSH 仓库: \$DSH_HOME"
-cd "\$DSH_HOME"
-echo "  最新提交: \`$(git log -1 --oneline)"
+echo "  DSH 仓库: `$DSH_HOME"
+cd "`$DSH_HOME"
+echo "  最新提交: `$(git log -1 --oneline)"
 "@
     $cloneDSH | Invoke-WslSilent
     $commitInfo = Invoke-WslSilent "cd $DSH_HOME && git log -1 --oneline"
@@ -684,11 +684,11 @@ cat >> ~/.bashrc << 'BASHRC_EOF'
 
 # === DeepSeek Harness 环境 ===
 export DSH_HOME="$DSH_HOME"
-export PATH="\$DSH_HOME/node_modules/.bin:\$PATH"
-alias dsh='cd \$DSH_HOME && pnpm dsh'
-alias dsh-web='cd \$DSH_HOME && pnpm dsh web'
-alias dsh-build='cd \$DSH_HOME && pnpm run build'
-alias dsh-update='cd \$DSH_HOME && git pull && pnpm install && pnpm run build'
+export PATH="`$DSH_HOME/node_modules/.bin:`$PATH"
+alias dsh='cd `$DSH_HOME && pnpm dsh'
+alias dsh-web='cd `$DSH_HOME && pnpm dsh web'
+alias dsh-build='cd `$DSH_HOME && pnpm run build'
+alias dsh-update='cd `$DSH_HOME && git pull && pnpm install && pnpm run build'
 echo "[DSH] 已加载 DeepSeek Harness 环境"
 echo "  启动 Web: dsh-web"
 echo "  更新 DSH: dsh-update"
@@ -709,15 +709,15 @@ echo "环境变量已写入 ~/.bashrc"
 
 set -e
 DSH_HOME="$DSH_HOME"
-cd "\$DSH_HOME"
+cd "`$DSH_HOME"
 
 echo "=============================="
 echo "  DSH Web v$script:DSH_VERSION"
 echo "=============================="
 
-if [ ! -f "\$DSH_HOME/.env" ]; then
+if [ ! -f "`$DSH_HOME/.env" ]; then
     echo "Note: .env not found. Start via DSH-Tray.exe for auto Token."
-    echo "      Or manually set DEEPSEEK_API_KEY in \$DSH_HOME/.env"
+    echo "      Or manually set DEEPSEEK_API_KEY in `$DSH_HOME/.env"
 fi
 
 echo "Starting DSH Web (port: $DSH_PORT)..."
@@ -784,9 +784,9 @@ pnpm dsh $DSH_PROFILE --port $DSH_PORT
     # 3.6 验证配置
     Write-Host "[3.6] 验证 DSH 配置..."
     $verifyConfig = @"
-echo "DSH version: \`$(node -e 'console.log(require(\"./package.json\").version)')"
-echo "Node.js: \`$(node -v)"
-echo "pnpm: \`$(pnpm -v)"
+echo "DSH version: `$(node -e 'console.log(require(\"./package.json\").version)')"
+echo "Node.js: `$(node -v)"
+echo "pnpm: `$(pnpm -v)"
 if [ -f .env ]; then echo "API Key: configured"; else echo "API Key: NOT configured"; fi
 if [ -x node_modules/.bin/dsh ]; then echo "DSH executable: yes"; else echo "DSH executable: no"; fi
 "@
