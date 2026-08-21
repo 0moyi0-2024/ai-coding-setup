@@ -276,7 +276,21 @@ function Start-Part1-WSL {
         $allDistros = (wsl -l -q 2>&1) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
         $userHasTarget = $allDistros -contains $targetName
 
+        # 检查 targetName 是否是我们之前安装的（含 dsh 用户标记）
+        $targetIsOurs = $false
         if ($userHasTarget) {
+            $marker = wsl -d $targetName -- bash -c "id dsh >/dev/null 2>&1 && echo DSH-OWN" 2>&1
+            if ($marker -match "DSH-OWN") {
+                $targetIsOurs = $true
+                $dshName = $targetName
+                $isNewInstall = $false
+                Write-Host "  检测到 $targetName 是 DSH 之前的安装，直接复用" -ForegroundColor Green
+            }
+        }
+
+        if ($targetIsOurs) {
+            # 是我们自己的安装，跳过安装步骤，直接复用
+        } elseif ($userHasTarget) {
             # 用户已有 Ubuntu-24.04 → 临时改名让出位置 → 装新的 → 改回
             Write-Host "  检测到已有 $targetName，临时改名让出位置..."
 
@@ -367,7 +381,8 @@ function Start-Part1-WSL {
             wsl --unregister $backupName 2>&1 | Out-Null
             Remove-Item $backupTar, $newTar -Force -ErrorAction SilentlyContinue
         } else {
-            # 没有同名系统，直接安装
+            # 系统上没有任何 Ubuntu → 直接安装标准名称，无需改名
+            $dshName = $targetName
             Write-Host "  正在下载 Ubuntu-${ubuntuVer}（约 500MB，首次需几分钟）..."
             wsl --install -d $targetName --no-launch 2>&1
             if ($LASTEXITCODE -ne 0) {
@@ -375,17 +390,6 @@ function Start-Part1-WSL {
                 wsl --install -d $targetName 2>&1
                 if ($LASTEXITCODE -ne 0) { throw "Ubuntu-${ubuntuVer} 安装失败，请检查网络" }
             }
-
-            Write-Host "  导入为 $dshName..."
-            $tmpTar = Join-Path $ScriptDir "_wsl_temp.tar"
-            wsl --export $targetName $tmpTar 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "导出临时系统失败" }
-            New-Item -ItemType Directory -Path "C:\WSL\$dshName" -Force | Out-Null
-            wsl --import $dshName "C:\WSL\$dshName" $tmpTar 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "导入 $dshName 失败" }
-            wsl --unregister $targetName 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "卸载临时系统失败" }
-            Remove-Item $tmpTar -Force -ErrorAction SilentlyContinue
         }
 
         # 创建用户 dsh（密码 123456），设 sudo 权限，设默认用户，配置免密码sudo
