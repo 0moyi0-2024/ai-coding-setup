@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 #  DeepSeek Harness (DSH) 一键安装脚本 — Windows + WSL
 #  从零到一：自动检测 Windows 版本 → 安装 WSL → 安装 DSH → 配置 → 测试验证
 #
@@ -162,6 +162,7 @@ function Invoke-WslSilent {
         $psi.RedirectStandardError = $true
         $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
         $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+        $psi.Environment["WSL_UTF8"] = "1"
 
         $p = [System.Diagnostics.Process]::Start($psi)
         $outTask = $p.StandardOutput.ReadToEndAsync()
