@@ -150,9 +150,11 @@ function Invoke-WslSilent {
         [int]$TimeoutMs = 600000  # 默认10分钟超时
     )
     process {
+        # Base64 编码避免中文乱码（Windows 命令行编码非 UTF-8）
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Command))
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = "wsl.exe"
-        $psi.Arguments = "-d $WSL_DISTRO -- bash -c `"$Command`""
+        $psi.Arguments = "-d $WSL_DISTRO -- bash -c `"echo $b64 | base64 -d | bash`""
         $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
         $psi.CreateNoWindow = $true
         $psi.UseShellExecute = $false
