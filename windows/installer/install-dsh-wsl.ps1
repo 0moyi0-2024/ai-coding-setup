@@ -784,7 +784,7 @@ pnpm dsh $DSH_PROFILE --port $DSH_PORT
     # 3.6 验证配置
     Write-Host "[3.6] 验证 DSH 配置..."
     $verifyConfig = @"
-echo "DSH version: `$(node -e 'console.log(require(\"./package.json\").version)')"
+echo "DSH version: `$(node -e 'console.log(require(""./package.json"").version)')"
 echo "Node.js: `$(node -v)"
 echo "pnpm: `$(pnpm -v)"
 if [ -f .env ]; then echo "API Key: configured"; else echo "API Key: NOT configured"; fi
