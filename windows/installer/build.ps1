@@ -1,6 +1,6 @@
-﻿<#
+<#
 .SYNOPSIS
-    DSH 一键构建脚本 v0.0.1
+    DSH 一键构建脚本 v$global:DSH_VERSION
 .DESCRIPTION
     自动完成：编译 ps1→exe → 编译 Inno Setup → 输出安装包
     用法: .\build.ps1 [-SkipInnoSetup]
@@ -11,9 +11,12 @@ param([switch]$SkipInnoSetup)
 $ErrorActionPreference = "Stop"
 $ScriptDir = $PSScriptRoot
 
+# 加载统一配置
+. "$PSScriptRoot\config.ps1"
+
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║   🐋 DSH 一键构建 v0.0.1                     ║" -ForegroundColor Cyan
+Write-Host "║   🐋 DSH 一键构建 v$global:DSH_VERSION                   ║" -ForegroundColor Cyan
 Write-Host "╚══════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
@@ -43,7 +46,7 @@ function Compile-PS1 {
         description = $Desc
         company     = "0moyi0-2024"
         product     = "DeepSeek Harness"
-        version     = "0.0.1.0"
+        version     = "0.1.0.8"
         noConsole   = $NoConsole
         runtime     = "win10"
         x64         = $true

@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 #  DeepSeek Harness (DSH) 一键安装脚本 — Windows + WSL
 #  从零到一：自动检测 Windows 版本 → 安装 WSL → 安装 DSH → 配置 → 测试验证
 #
@@ -740,7 +740,7 @@ pnpm dsh $DSH_PROFILE --port $DSH_PORT
         $shortcut.TargetPath = $trayExe
         $shortcut.WorkingDirectory = $ScriptDir
         $shortcut.IconLocation = "$trayExe,0"
-        $shortcut.Description = "🐋 DeepSeek Harness v0.0.1 - 双击启动托盘"
+        $shortcut.Description = "🐋 DeepSeek Harness v$script:DSH_VERSION - 双击启动托盘"
         $shortcut.Save()
         Test-OK "桌面快捷方式已创建（托盘模式）: $shortcutPath"
     } else {
@@ -752,7 +752,7 @@ pnpm dsh $DSH_PROFILE --port $DSH_PORT
             $shortcut.TargetPath = $batFile
             $shortcut.WorkingDirectory = $ScriptDir
             $shortcut.IconLocation = "$iconPath,0"
-            $shortcut.Description = "🐋 DeepSeek Harness Web v0.0.1"
+            $shortcut.Description = "🐋 DeepSeek Harness Web v$script:DSH_VERSION"
             $shortcut.Save()
             Test-OK "桌面快捷方式已创建（终端模式）: $shortcutPath"
             Write-Host "  ℹ️ 提示：编译 DSH-Tray.exe 后快捷方式将指向托盘管理器" -ForegroundColor Cyan

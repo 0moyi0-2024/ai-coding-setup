@@ -1,6 +1,6 @@
-﻿<#
+<#
 .SYNOPSIS
-    DeepSeek Harness 系统托盘管理器 v0.0.1
+    DeepSeek Harness 系统托盘管理器 v0.1.0-rc.8
 .DESCRIPTION
     像 QQ/微信一样在右下角任务栏显示图标
     双击打开浏览器，右键控制启动/停止/Token配置
