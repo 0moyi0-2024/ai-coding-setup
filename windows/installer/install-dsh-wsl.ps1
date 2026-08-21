@@ -292,22 +292,28 @@ function Start-Part1-WSL {
             # 是我们自己的安装，跳过安装步骤，直接复用
         } elseif ($userHasTarget) {
             # 用户已有 Ubuntu-24.04 → 临时改名让出位置 → 装新的 → 改回
-            Write-Host "  检测到已有 $targetName，临时改名让出位置..."
+            Write-Host "  检测到已有 $targetName，需要临时改名让出位置..."
+
+            # 提示用户确认
+            Write-Host ""
+            Write-Host "  ⚠️  即将执行以下操作（不影响你原有系统数据）：" -ForegroundColor Yellow
+            Write-Host "    1. 备份 $targetName → 安装全新 Ubuntu → 改名为 $dshName"
+            Write-Host "    2. 恢复你的原有 $targetName（整个过程约 5-15 分钟）"
+            Write-Host "    3. 你的 $targetName 系统数据不会被修改"
+            Write-Host ""
+            $confirm = Read-Host "  是否继续？(y/N)"
+            if ($confirm -ne "y" -and $confirm -ne "Y") {
+                Write-Host "  已取消。你可以："
+                Write-Host "    - 手动安装 WSL: wsl --install -d $targetName"
+                Write-Host "    - 或重新运行此脚本重试"
+                exit 0
+            }
 
             # 检查原系统是否正在运行（精确匹配，转义正则特殊字符）
             $escapedName = [regex]::Escape($targetName)
             $runningInfo = (wsl -l -v 2>&1) -split "`n" | Where-Object { $_ -match "^\s*\*?\s*${escapedName}\s" }
             if ($runningInfo -match "Running") {
-                Write-Host ""
-                Write-Host "  ⚠️  $targetName 正在运行中！" -ForegroundColor Yellow
-                Write-Host "  临时改名需要停止原系统中的所有服务（包括 DSH）" -ForegroundColor Yellow
-                Write-Host "  改名完成后会自动恢复，但服务需要手动重启" -ForegroundColor Yellow
-                Write-Host ""
-                $confirm = Read-Host "  是否继续？(y/N)"
-                if ($confirm -ne "y" -and $confirm -ne "Y") {
-                    Write-Host "  已取消。请先手动停止服务后重试" -ForegroundColor Yellow
-                    exit 0
-                }
+                Write-Host "  ⚠️  $targetName 正在运行中，改名过程中将自动停止其服务" -ForegroundColor Yellow
                 wsl --terminate $targetName 2>&1 | Out-Null
                 Start-Sleep -Seconds 2
             }
