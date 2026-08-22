@@ -229,7 +229,7 @@ if (-not $SkipInnoSetup) {
         $issContent = Get-Content $issFile -Raw -Encoding UTF8
         $issContent = $issContent -replace '(?m)^(#define MyAppVersion ")[^"]*(".*)$', "`${1}$($global:DSH_VERSION)`$2"
         $compilerDir = Split-Path -Parent $iscc
-        $defaultLanguage = Join-Path $compilerDir "Languages\Default.isl"
+        $defaultLanguage = Join-Path $compilerDir "Default.isl"
         $chineseLanguage = Join-Path $compilerDir "Languages\ChineseSimplified.isl"
         if (-not (Test-Path -LiteralPath $defaultLanguage -PathType Leaf)) {
             throw "Inno Setup 默认语言文件不存在: $defaultLanguage"

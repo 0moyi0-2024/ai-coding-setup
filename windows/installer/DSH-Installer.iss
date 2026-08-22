@@ -39,7 +39,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 
 [Languages]
 Name: "chinese"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
-Name: "english"; MessagesFile: "compiler:Languages\Default.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 ; 核心程序（编译后的 exe，无需 PowerShell 即可运行）
