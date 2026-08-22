@@ -166,18 +166,20 @@ foreach ($f in $required) {
 
 # ===== Step 3: Inno Setup =====
 function Find-InnoSetupCompiler {
-    $command = Get-Command "iscc" -ErrorAction SilentlyContinue
-    if ($command) { return $command.Source }
-
     $paths = @(
         "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
         "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
-        "$env:ChocolateyInstall\bin\ISCC.exe"
+        "$env:LOCALAPPDATA\Inno Setup 6\ISCC.exe"
     )
     foreach ($path in $paths) {
         if ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) { return $path }
     }
+
+    # Chocolatey may expose a shim in its bin directory. Use it only as a
+    # last resort because its directory does not contain Inno's language files.
+    $command = Get-Command "iscc" -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
     return $null
 }
 
