@@ -79,6 +79,19 @@ function Compile-PS1 {
 
     Write-Host "  编译: $(Split-Path $Source -Leaf) → $(Split-Path $Output -Leaf)..."
 
+    # 编译前去掉所有 #requires 行
+    # （PS2EXE 编译时会校验 #requires，GitHub Actions runner 没有管理员权限，
+    #   且 #requires -Version 也会被校验，可能导致意外的兼容性问题）
+    $tempSource = $null
+    $content = Get-Content $Source -Raw -Encoding UTF8
+    if ($content -match '#requires\s') {
+        Write-Host "    去掉 #requires 行再编译..."
+        $content = $content -replace '.*#requires\s.*\r?\n?', ''
+        $tempSource = Join-Path $env:TEMP "dsh-compile-$(Get-Random).ps1"
+        Set-Content $tempSource -Value $content -Encoding UTF8 -NoNewline
+        $Source = $tempSource
+    }
+
     # 最小参数集
     $args = @{
         inputFile  = $Source
@@ -114,6 +127,9 @@ function Compile-PS1 {
             }
         }
         return $false
+    } finally {
+        # 清理临时文件
+        if ($tempSource) { Remove-Item $tempSource -Force -ErrorAction SilentlyContinue }
     }
 }
 
