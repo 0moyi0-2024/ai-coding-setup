@@ -183,16 +183,26 @@ if (-not $SkipInnoSetup) {
         if ($iscc) {
             $issContent = Get-Content $issFile -Raw -Encoding UTF8
             $issContent = $issContent -replace '(?m)^(#define MyAppVersion ")[^"]*(".*)$', "`${1}$($global:DSH_VERSION)`$2"
-            $tempIss = Join-Path $env:TEMP "DSH-Build-$(Get-Date -Format yyyyMMddHHmmss).iss"
-            Set-Content $tempIss -Value $issContent -Encoding UTF8 -NoNewline
-            & $iscc $tempIss
-            Remove-Item $tempIss -Force -ErrorAction SilentlyContinue
-            $setup = Join-Path $ScriptDir "DSH-一键安装-$($global:DSH_VERSION).exe"
-            if (Test-Path $setup) {
-                $size = [math]::Round((Get-Item $setup).Length / 1MB, 1)
-                Write-Host "  ✅ 安装包: DSH-一键安装-$($global:DSH_VERSION).exe ($size MB)"
-            } else {
-                Write-Host "  ⚠️ Inno Setup 编译未生成安装包"
+            # Keep the temporary script beside the source ISS. Inno Setup
+            # resolves SetupIconFile, Source, and OutputDir relative to the
+            # ISS file's directory.
+            $tempIss = Join-Path $ScriptDir ".DSH-Build-$([guid]::NewGuid().ToString('N')).iss"
+            try {
+                Set-Content $tempIss -Value $issContent -Encoding UTF8 -NoNewline
+                & $iscc $tempIss
+                $isccExitCode = $LASTEXITCODE
+                if ($isccExitCode -ne 0) {
+                    throw "Inno Setup 编译失败，退出码: $isccExitCode"
+                }
+                $setup = Join-Path $ScriptDir "DSH-一键安装-$($global:DSH_VERSION).exe"
+                if (Test-Path $setup) {
+                    $size = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+                    Write-Host "  ✅ 安装包: DSH-一键安装-$($global:DSH_VERSION).exe ($size MB)"
+                } else {
+                    throw "Inno Setup 未生成安装包: $setup"
+                }
+            } finally {
+                Remove-Item $tempIss -Force -ErrorAction SilentlyContinue
             }
         } else {
             Write-Host "  ⚠️ 未找到 Inno Setup，跳过"
