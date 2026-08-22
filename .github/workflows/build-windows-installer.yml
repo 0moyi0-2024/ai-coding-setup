@@ -71,9 +71,20 @@ jobs:
       - name: 构建 DSH Windows 安装包
         working-directory: windows/installer
         run: |
-          # 确保中文输出不乱码
           $OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
-          ./build.ps1
+          Write-Host "=== PowerShell 版本: $($PSVersionTable.PSVersion) ==="
+          Write-Host "=== 当前目录: $(Get-Location) ==="
+          Write-Host "=== PS2EXE cmdlet 是否可用: $(Get-Command Invoke-PS2EXE -ErrorAction SilentlyContinue) ==="
+          Write-Host "=== 目录文件 ==="
+          Get-ChildItem | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host "=== 开始构建 ==="
+          try {
+            ./build.ps1
+          } catch {
+            Write-Host "构建异常: $_" -ForegroundColor Red
+            Write-Host "堆栈: $($_.ScriptStackTrace)" -ForegroundColor Red
+            exit 1
+          }
 
       # =================================================================
       # Step 5: 验证输出文件

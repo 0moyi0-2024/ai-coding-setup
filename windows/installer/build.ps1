@@ -59,13 +59,26 @@ function Compile-PS1 {
         product     = "DeepSeek Harness"
         version     = $exeVersion
         noConsole   = $NoConsole
-        noConfigFile = $false
     }
+    # 图标文件存在才传入，避免路径问题导致编译失败
     if (Test-Path $iconFile) { $params['iconFile'] = $iconFile }
 
-    Invoke-PS2EXE @params
+    Write-Host "  编译: $(Split-Path $Source -Leaf) → $(Split-Path $Output -Leaf)..."
+    try {
+        Invoke-PS2EXE @params
+    } catch {
+        Write-Host "  ⚠️ PS2EXE 编译失败，错误信息: $_" -ForegroundColor Red
+        # 尝试不带图标再试一次
+        if ($params.ContainsKey('iconFile')) {
+            $params.Remove('iconFile')
+            Write-Host "  重试（不带图标）..." -ForegroundColor Yellow
+            Invoke-PS2EXE @params
+        } else {
+            throw
+        }
+    }
     $size = [math]::Round((Get-Item $Output).Length / 1KB, 1)
-    Write-Host "  ✅ $Output ($size KB)" -ForegroundColor Green
+    Write-Host "  ✅ $(Split-Path $Output -Leaf) ($size KB)" -ForegroundColor Green
     return $true
 }
 
