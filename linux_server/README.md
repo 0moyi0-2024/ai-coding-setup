@@ -11,12 +11,17 @@ Claude Code、Codex、Claude Code Router（CCR）、Node.js、配置和缓存都
 ai-coding-setup/
 ├── README.md
 ├── set_claude_provider_keys.sh
+├── dsh_server/
+│   ├── start_dsh_service.sh
+│   └── README.md
 └── test/
     └── set_claude_provider_keys_test.sh
 ```
 
 `set_claude_provider_keys_test.sh` 默认执行修改代码后的隔离开发测试；加上
 `--installed-codex` 后，用于安装完成后检查当前容器中的真实 Codex 配置。
+
+`dsh_server/` 目录用于将 DSH Web 服务注册为 systemd 后台服务，支持开机自启和异常自动重启。详见 [dsh_server/README.md](dsh_server/README.md)。
 
 ## 这套脚本会做什么
 

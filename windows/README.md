@@ -43,9 +43,9 @@
 ### 一键安装
 
 ```powershell
-# 1. 以管理员身份打开 PowerShell
+# 1. 以管理员身份打开 PowerShell 7
 # 2. 进入脚本目录
-cd windows
+cd windows\installer
 
 # 3. 首次运行设置执行策略
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
