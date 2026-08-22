@@ -87,6 +87,9 @@ catalog 以及模型 metadata 是否能被 Codex 正确加载。它只使用 Cod
 
 安装脚本会在当前用户的 `~/.bashrc` 中维护一个带标记的配置区块，让以后新打开的
 Bash 会话自动加载 `/agent/env.sh`。重复运行安装脚本不会重复追加配置。
+`/agent/env.sh` 本身也会在加载时先移除 PATH 中已有的 `/agent/bin` 和
+`/agent/node/bin`，再各添加一次，因此反复执行 `source` 或打开嵌套 Bash 不会让
+PATH 持续增长。
 
 安装脚本无法修改已经启动的 shell 进程，因此安装完成后仍需在当前 shell 执行一次：
 

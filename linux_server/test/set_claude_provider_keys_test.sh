@@ -614,6 +614,23 @@ test_agent_layout() {
   pass "simple container-local agent layout"
 }
 
+test_runtime_environment_path_idempotence() {
+  local polluted_path expected_path first_load repeated_load
+  polluted_path="${AGENT_BIN_DIR}:/usr/bin:${NODE_INSTALL_DIR}/bin:${AGENT_BIN_DIR}:/bin:${NODE_INSTALL_DIR}/bin"
+  expected_path="${AGENT_BIN_DIR}:${NODE_INSTALL_DIR}/bin:/usr/bin:/bin"
+
+  first_load=$(PATH="${polluted_path}" bash -c \
+    'source "$1"; printf "%s\n" "$PATH"' bash "${AGENT_ENV_FILE}")
+  repeated_load=$(PATH="${polluted_path}" bash -c \
+    'source "$1"; source "$1"; source "$1"; printf "%s\n" "$PATH"' \
+    bash "${AGENT_ENV_FILE}")
+
+  assert_eq "${expected_path}" "${first_load}" \
+    "environment removes pre-existing managed PATH entries"
+  assert_eq "${expected_path}" "${repeated_load}" \
+    "repeated environment loading keeps PATH stable"
+  pass "idempotent runtime PATH loading"
+}
 test_bash_startup_configuration() {
   local original_mode loaded_environment
   mkdir -p "$(dirname -- "${BASH_RC_FILE}")"
@@ -874,6 +891,7 @@ test_completion_hint() {
 
 require_command jq
 test_agent_layout
+test_runtime_environment_path_idempotence
 test_bash_startup_configuration
 test_operation_manual
 test_node_platform

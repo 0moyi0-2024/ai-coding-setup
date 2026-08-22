@@ -124,9 +124,14 @@ cleanup_temp_dir() {
 write_runtime_files() {
   local env_content claude_launcher codex_launcher ccr_launcher
   printf -v env_content \
-    'export PATH=%q:%q:$PATH\nexport CLAUDE_CONFIG_DIR=%q\nexport CODEX_HOME=%q\nexport NPM_CONFIG_CACHE=%q\n[[ ! -f %q ]] || source %q' \
-    "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" "${CLAUDE_CONFIG_DIR}" \
-    "${CODEX_DIR}" "${AGENT_CACHE_DIR}/npm" "${CODEX_ENV_FILE}" "${CODEX_ENV_FILE}"
+    'ai_setup_prepend_path() {\n  local ai_setup_entry ai_setup_rest ai_setup_clean=\x27\x27\n  ai_setup_rest=${PATH:-}\n  while [[ -n "${ai_setup_rest}" ]]; do\n    case "${ai_setup_rest}" in\n      *:*) ai_setup_entry=${ai_setup_rest%%:*}; ai_setup_rest=${ai_setup_rest#*:} ;;\n      *) ai_setup_entry=${ai_setup_rest}; ai_setup_rest=\x27\x27 ;;\n    esac\n    [[ "${ai_setup_entry}" == %q || "${ai_setup_entry}" == %q || -z "${ai_setup_entry}" ]] && continue\n    [[ -n "${ai_setup_clean}" ]] && ai_setup_clean+=:\n    ai_setup_clean+=${ai_setup_entry}\n  done\n  PATH=%q:%q${ai_setup_clean:+:${ai_setup_clean}}\n  export PATH\n}\nai_setup_prepend_path\nunset -f ai_setup_prepend_path\nexport CLAUDE_CONFIG_DIR=%q\nexport CODEX_HOME=%q\nexport NPM_CONFIG_CACHE=%q\n[[ ! -f %q ]] || source %q' \
+    "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" \
+    "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" \
+    "${CLAUDE_CONFIG_DIR}" "${CODEX_DIR}" "${AGENT_CACHE_DIR}/npm" \
+    "${CODEX_ENV_FILE}" "${CODEX_ENV_FILE}"
+  # The format string treats %% as a literal %, so restore the Bash longest-prefix
+  # expansion after printf renders the template.
+  env_content=${env_content//'${ai_setup_rest%:*}'/'${ai_setup_rest%%:*}'}
   write_secure_file "${AGENT_ENV_FILE}" "${env_content}"
 
   printf -v claude_launcher \
