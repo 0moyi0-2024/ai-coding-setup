@@ -228,6 +228,16 @@ if (-not $SkipInnoSetup) {
 
         $issContent = Get-Content $issFile -Raw -Encoding UTF8
         $issContent = $issContent -replace '(?m)^(#define MyAppVersion ")[^"]*(".*)$', "`${1}$($global:DSH_VERSION)`$2"
+        $compilerDir = Split-Path -Parent $iscc
+        $defaultLanguage = Join-Path $compilerDir "Languages\Default.isl"
+        $chineseLanguage = Join-Path $compilerDir "Languages\ChineseSimplified.isl"
+        if (-not (Test-Path -LiteralPath $defaultLanguage -PathType Leaf)) {
+            throw "Inno Setup 默认语言文件不存在: $defaultLanguage"
+        }
+        if (-not (Test-Path -LiteralPath $chineseLanguage -PathType Leaf)) {
+            Write-Host "  ⚠️ 未找到中文语言包，将使用英文界面: $chineseLanguage" -ForegroundColor Yellow
+            $issContent = $issContent -replace '(?m)^Name: "chinese";.*\r?\n?', ''
+        }
         # Keep the temporary script beside the source ISS. Inno Setup
         # resolves SetupIconFile, Source, and OutputDir relative to the
         # ISS file's directory.

@@ -38,8 +38,8 @@ PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog
 
 [Languages]
-Name: "chinese"; MessagesFile: "ChineseSimplified.isl"
-Name: "english"; MessagesFile: "Default.isl"
+Name: "chinese"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "english"; MessagesFile: "compiler:Languages\Default.isl"
 
 [Files]
 ; 核心程序（编译后的 exe，无需 PowerShell 即可运行）
