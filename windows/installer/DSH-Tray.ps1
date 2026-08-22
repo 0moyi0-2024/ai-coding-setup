@@ -14,14 +14,21 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic
 
-$modDir = $PSScriptRoot
+# 获取脚本所在目录，兼容 PS2EXE 编译的 exe（$PSScriptRoot 可能为空）
+$modDir = if ($PSScriptRoot) {
+    $PSScriptRoot
+} elseif ($MyInvocation.MyCommand.Path) {
+    Split-Path -Parent $MyInvocation.MyCommand.Path
+} else {
+    Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+}
 . (Join-Path $modDir "config.ps1")
 . (Join-Path $modDir "dsh-crypto.ps1")
 . (Join-Path $modDir "dsh-wsl.ps1")
 . (Join-Path $modDir "dsh-service.ps1")
 
 # ===== 托盘图标 =====
-$ICON_FILE = Join-Path $PSScriptRoot "icon.ico"
+$ICON_FILE = Join-Path $modDir "icon.ico"
 $TRAY_ICON = if (Test-Path $ICON_FILE) {
     New-Object System.Drawing.Icon($ICON_FILE)
 } else {
