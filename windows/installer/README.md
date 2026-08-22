@@ -4,14 +4,12 @@
 
 ## 前置准备
 
-1. **准备 Inno Setup**
-   - 运行 `build.ps1` 时会自动尝试通过 `winget` 或 Chocolatey 安装 Inno Setup
-   - 也可以手动安装：https://jrsoftware.org/download.php/is.exe
-   - 安装后重新运行 `build.ps1`
-
-2. **准备图标（可选）**
-   - 把 `icon.ico` 放到本目录（没有会报错，可以先用任意 .ico 文件代替）
-   - 也可以用工具从 PNG 转 .ico：https://icoconverter.com
+1. **PowerShell 7**
+   - 脚本要求 PowerShell 7；可通过 `winget install --id Microsoft.PowerShell --source winget` 安装
+2. **网络和权限**
+   - 首次构建可能需要下载 PS2EXE、Inno Setup 和官方中文语言包
+   - 如果自动安装依赖失败，可以手动安装 Inno Setup：https://jrsoftware.org/download.php/is.exe
+   - `icon.ico` 已随仓库提供，不需要另行准备
 
 ## 编译步骤
 
@@ -22,7 +20,13 @@
 4. 生成的文件：`DSH-一键安装-0.1.0-rc.8.exe`
 ```
 
-构建生成的 `.exe` 不提交到源码仓库。GitHub Actions 会将它们上传为构建 Artifact，并在发布 Release 时附加安装包。
+构建生成的 `.exe` 不提交到源码仓库。GitHub Actions 会将它们上传为 `DSH-Windows-Installer` Artifact，并在发布 Release 时附加安装包。
+
+## 下载 CI 安装包
+
+不需要本地构建时，可以从 [GitHub Actions](https://github.com/0moyi0-2024/ai-coding-setup/actions) 下载：选择最新的成功运行记录，打开详情页，在页面底部 **Artifacts** 区域点击 `DSH-Windows-Installer`。解压下载的 ZIP 后，带版本号的 `DSH-一键安装-<版本号>.exe` 是完整安装包。
+
+正式发布版本也可以从 [Releases](https://github.com/0moyi0-2024/ai-coding-setup/releases) 下载。Artifacts 可能要求先登录 GitHub。
 
 ## 生成的安装包功能
 
@@ -53,8 +57,9 @@
 安装 WSL → 装 DSH → 配置 → 验证
 ```
 
-## 注意
+## 构建故障排查
 
 - `[Languages]` 使用 Inno Setup 编译器内置的 `compiler:Default.isl`
 - 如果本机没有中文语言包，`build.ps1` 会从 Inno Setup 官方仓库下载临时语言文件；网络不可用时自动回退为英文界面
-- 安装路径不要有中文和空格，否则脚本可能出错
+- 如果看到 `iscc` 不在 PATH，通常不影响构建；脚本会搜索 Inno Setup 的实际安装目录
+- 如果构建失败，请保留「构建 DSH Windows 安装包」步骤中从第一个 `Error` 开始的完整日志

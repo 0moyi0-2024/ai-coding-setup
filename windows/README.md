@@ -54,6 +54,29 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 .\install-dsh-wsl.ps1
 ```
 
+### 获取或构建安装包
+
+普通用户无需在本地编译。可以按下面步骤下载 CI 已构建的安装包：
+
+1. 打开仓库的 [GitHub Actions 页面](https://github.com/0moyi0-2024/ai-coding-setup/actions)。
+2. 选择最新的成功运行记录（绿色勾号），进入详情页。
+3. 滚动到页面底部的 **Artifacts** 区域，点击 `DSH-Windows-Installer` 下载 ZIP 文件。
+4. 解压 ZIP 文件，运行其中的 `DSH-一键安装-<版本号>.exe`；也可以先单独运行 `DSH-一键安装.exe`、`DSH-Tray.exe` 或 `清理DSH.exe`。
+
+Artifacts 通常需要登录 GitHub 才能下载。发布正式 Release 时，完整安装包也会附加在 [Releases 页面](https://github.com/0moyi0-2024/ai-coding-setup/releases)，可直接下载。
+
+开发者需要本地构建时，在 PowerShell 7 中运行：
+
+```powershell
+cd windows\installer
+Set-ExecutionPolicy -Scope Process Bypass
+.\build.ps1
+```
+
+`build.ps1` 会自动检查并安装 PS2EXE 和 Inno Setup（优先使用 `winget`，其次使用 Chocolatey），把三个 PowerShell 脚本编译为 EXE，再生成带版本号的完整安装包。中文语言包缺失时，脚本会从 Inno Setup 官方仓库临时下载；网络不可用时回退为英文界面。
+
+构建产生的 `.exe` 只作为本地输出或 CI Artifact，不提交到源码仓库。
+
 ### 分步安装
 
 ```powershell
@@ -122,8 +145,6 @@ $WSL_DISTRO = "Ubuntu-22.04"   # 手动指定，跳过自动检测
 - ⚠️ 首次安装 WSL 需要下载约 500MB，请确保网络畅通
 - ⚠️ 安装过程中会提示输入 DeepSeek API Key，可在 [platform.deepseek.com](https://platform.deepseek.com/api_keys) 获取
 - ⚠️ 如果遇到 WSL 2 内核更新包提示，请访问 [aka.ms/wsl2kernel](https://aka.ms/wsl2kernel) 下载安装
-
-## 相关脚本
 
 ## 相关脚本
 
