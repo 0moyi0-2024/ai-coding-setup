@@ -12,8 +12,16 @@ param([switch]$SkipInnoSetup)
 $ErrorActionPreference = "Stop"
 $ScriptDir = $PSScriptRoot
 
-# 加载统一配置
+# 加载统一配置（含 $global:DSH_VERSION）
 . "$PSScriptRoot\config.ps1"
+
+# 从 config.ps1 里的版本号派生 exe 四段式版本
+# "0.1.0-rc.8" → "0.1.0.8"；"1.2.3" → "1.2.3.0"
+$exeVersion = $global:DSH_VERSION -replace '^(\d+\.\d+\.\d+)(?:-.*)?(\d+)?$', {
+    $base = $matches[1]
+    $build = if ($matches[2]) { $matches[2] } else { "0" }
+    "$base.$build"
+}
 
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
@@ -21,8 +29,8 @@ Write-Host "║   🐋 DSH 一键构建 v$global:DSH_VERSION                   �
 Write-Host "╚══════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
-# ===== Step 1: 编译 PowerSh⁠ell → EXE =====
-Write-Host "[1/3] 编译 PowerSh⁠ell → EXE..." -ForegroundColor Yellow
+# ===== Step 1: 编译 PowerShell → EXE =====
+Write-Host "[1/3] 编译 PowerShell → EXE..." -ForegroundColor Yellow
 
 $ps2exe = Get-Module -ListAvailable -Name ps2exe
 if (-not $ps2exe) {
@@ -47,9 +55,8 @@ function Compile-PS1 {
         description = $Desc
         company     = "0moyi0-2024"
         product     = "DeepSeek Harness"
-        version     = "0.1.0.8"
+        version     = $exeVersion
         noConsole   = $NoConsole
-        runtime     = "win10"
         x64         = $true
         noOutput    = $true
     }
@@ -113,7 +120,13 @@ if (-not $SkipInnoSetup) {
             }
         }
         if ($iscc) {
-            & $iscc $issFile
+            # 编译前生成一个临时 ISS，把版本号替换为 config.ps1 中的当前版本（不修改原文件）
+            $issContent = Get-Content $issFile -Raw -Encoding UTF8
+            $issContent = $issContent -replace '(?m)^(#define MyAppVersion ")[^"]*(".*)$', "`${1}$($global:DSH_VERSION)`$2"
+            $tempIss = Join-Path $env:TEMP "DSH-Build-$(Get-Date -Format yyyyMMddHHmmss).iss"
+            Set-Content $tempIss -Value $issContent -Encoding UTF8 -NoNewline
+            & $iscc $tempIss
+            Remove-Item $tempIss -Force -ErrorAction SilentlyContinue
             $setup = Join-Path $ScriptDir "DSH-一键安装-$($global:DSH_VERSION).exe"
             if (Test-Path $setup) {
                 $size = [math]::Round((Get-Item $setup).Length / 1MB, 1)

@@ -1,3 +1,24 @@
 *.bak
 *.bak.*
+*.log
+
+# 编译产物
+*.exe
+*.msi
+
+# 临时/备份文件
+_wsl_backup.tar
+*.tmp
+*.temp
+
+# 敏感配置
+.env
+*.enc
+
+# 测试临时目录
 test/.ai-setup-test.*
+**/.ai-setup-test.*
+
+# 系统文件
+Thumbs.db
+.DS_Store

@@ -1,8 +1,8 @@
 ; DeepSeek Harness (DSH) 安装包 — Inno Setup 脚本
 ; 使用方法：在 Windows 上安装 Inno Setup 后，右键此文件 → Compile
 ;
-; 注意：编译前请先运行 build-to-exe.ps1 生成 DSH-一键安装.exe 和 清理DSH.exe
-;       这样安装包内含 .exe 版本，用户无需安装 PowerShell
+; 注意：build.ps1 会自动完成 ps1→exe 编译、版本号注入、ISS 打包全部流程
+;       直接运行 build.ps1 即可，无需手动分步操作
 
 #define MyAppName "DeepSeek Harness (DSH)"
 #define MyAppVersion "0.1.0-rc.8"
