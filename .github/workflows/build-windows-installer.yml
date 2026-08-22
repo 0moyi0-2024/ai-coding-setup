@@ -1,0 +1,118 @@
+name: Build Windows Installer
+
+# =============================================================================
+#  自动编译 DSH Windows 安装包
+#  - 推送代码 → 自动构建验证（上传到 Artifacts）
+#  - 发布 Release → 自动构建并附加安装包到 Release
+#  - 手动触发 → 随时构建
+# =============================================================================
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/build-windows-installer.yml'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+# release 事件需要写权限来上传附件
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: pwsh  # 强制使用 PowerShell 7
+
+    steps:
+      # =================================================================
+      # Step 1: 拉取代码
+      # =================================================================
+      - name: Checkout 仓库
+        uses: actions/checkout@v4
+
+      # =================================================================
+      # Step 2: 安装 Inno Setup（用 chocolatey）
+      # =================================================================
+      - name: 安装 Inno Setup
+        run: |
+          choco install innosetup -y --no-progress --limit-output
+          Write-Host "Inno Setup 安装完成"
+          # 验证 ISCC.exe 可被脚本找到
+          if (Test-Path "${env:ProgramFiles}\Inno Setup 6\ISCC.exe") {
+            Write-Host "  ISCC: ${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          } elseif (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") {
+            Write-Host "  ISCC: ${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          } else {
+            Write-Host "  ⚠️ 未找到 ISCC.exe，尝试搜索..."
+            Get-ChildItem "C:\Program Files\Inno Setup 6\ISCC.exe" -ErrorAction SilentlyContinue
+            Get-ChildItem "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" -ErrorAction SilentlyContinue
+          }
+
+      # =================================================================
+      # Step 3: 安装 PS2EXE 模块（build.ps1 也会装，但提前装好更可靠）
+      # =================================================================
+      - name: 安装 PS2EXE 模块
+        run: |
+          # 避免交互式提示
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+          Install-Module -Name ps2exe -Force -AllowClobber -Scope CurrentUser
+          Write-Host "PS2EXE 模块安装完成: $(Get-Module -ListAvailable -Name ps2exe | Select-Object -First 1 | ForEach-Object { "$($_.Name) $($_.Version)" })"
+
+      # =================================================================
+      # Step 4: 运行构建
+      # =================================================================
+      - name: 构建 DSH Windows 安装包
+        working-directory: windows/installer
+        run: |
+          # 确保中文输出不乱码
+          $OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
+          ./build.ps1
+
+      # =================================================================
+      # Step 5: 验证输出文件
+      # =================================================================
+      - name: 列出构建产物
+        working-directory: windows/installer
+        run: |
+          Write-Host "========== 构建产物 =========="
+          Get-ChildItem *.exe | ForEach-Object {
+            $sizeKB = [math]::Round($_.Length / 1KB, 1)
+            $sizeMB = [math]::Round($_.Length / 1MB, 1)
+            $label = if ($sizeMB -ge 1) { "$sizeMB MB" } else { "$sizeKB KB" }
+            Write-Host "  📄 $($_.Name)  ($label)" -ForegroundColor Green
+          }
+          Write-Host "=============================="
+
+      # =================================================================
+      # Step 6: 上传构建产物（每次 push 都保留）
+      # =================================================================
+      - name: 上传 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSH-Windows-Installer
+          # 保留 30 天（默认 90 天，节省空间）
+          retention-days: 30
+          path: |
+            windows/installer/DSH-一键安装-*.exe
+            windows/installer/DSH-一键安装.exe
+            windows/installer/DSH-Tray.exe
+            windows/installer/清理DSH.exe
+
+      # =================================================================
+      # Step 7: 发布 Release 时自动附加安装包
+      # =================================================================
+      - name: 上传到 GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            windows/installer/DSH-一键安装-*.exe
+            windows/installer/DSH-一键安装.exe
+            windows/installer/DSH-Tray.exe
+            windows/installer/清理DSH.exe
