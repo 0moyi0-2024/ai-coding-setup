@@ -164,48 +164,90 @@ foreach ($f in $required) {
 }
 
 # ===== Step 3: Inno Setup =====
+function Find-InnoSetupCompiler {
+    $command = Get-Command "iscc" -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+
+    $paths = @(
+        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+        "$env:ChocolateyInstall\bin\ISCC.exe"
+    )
+    foreach ($path in $paths) {
+        if ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) { return $path }
+    }
+    return $null
+}
+
+function Refresh-ProcessPath {
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($machinePath -or $userPath) {
+        $env:Path = @($machinePath, $userPath) -join ";"
+    }
+}
+
 if (-not $SkipInnoSetup) {
     Write-Host "[4] 编译 Inno Setup 安装包..."
     $issFile = Join-Path $ScriptDir "DSH-Installer.iss"
     if (-not (Test-Path $issFile)) {
-        Write-Host "  ⚠️ DSH-Installer.iss 不存在，跳过"
+        throw "DSH-Installer.iss 不存在: $issFile"
     } else {
-        $iscc = Get-Command "iscc" -ErrorAction SilentlyContinue
+        $iscc = Find-InnoSetupCompiler
         if (-not $iscc) {
-            $isccPaths = @(
-                "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
-                "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-            )
-            foreach ($p in $isccPaths) {
-                if (Test-Path $p) { $iscc = $p; break }
+            Write-Host "  未找到 Inno Setup，尝试自动安装..." -ForegroundColor Yellow
+
+            $winget = Get-Command "winget" -ErrorAction SilentlyContinue
+            if ($winget) {
+                Write-Host "  使用 winget 安装 JRSoftware.InnoSetup..."
+                & $winget.Source install --id JRSoftware.InnoSetup --exact --accept-source-agreements --accept-package-agreements
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "  ⚠️ winget 安装失败，退出码: $LASTEXITCODE" -ForegroundColor Yellow
+                }
+                Refresh-ProcessPath
+                $iscc = Find-InnoSetupCompiler
+            }
+
+            if (-not $iscc) {
+                $choco = Get-Command "choco" -ErrorAction SilentlyContinue
+                if ($choco) {
+                    Write-Host "  使用 Chocolatey 安装 innosetup..."
+                    & $choco.Source install innosetup -y --no-progress --limit-output
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host "  ⚠️ Chocolatey 安装失败，退出码: $LASTEXITCODE" -ForegroundColor Yellow
+                    }
+                    Refresh-ProcessPath
+                    $iscc = Find-InnoSetupCompiler
+                }
             }
         }
-        if ($iscc) {
-            $issContent = Get-Content $issFile -Raw -Encoding UTF8
-            $issContent = $issContent -replace '(?m)^(#define MyAppVersion ")[^"]*(".*)$', "`${1}$($global:DSH_VERSION)`$2"
-            # Keep the temporary script beside the source ISS. Inno Setup
-            # resolves SetupIconFile, Source, and OutputDir relative to the
-            # ISS file's directory.
-            $tempIss = Join-Path $ScriptDir ".DSH-Build-$([guid]::NewGuid().ToString('N')).iss"
-            try {
-                Set-Content $tempIss -Value $issContent -Encoding UTF8 -NoNewline
-                & $iscc $tempIss
-                $isccExitCode = $LASTEXITCODE
-                if ($isccExitCode -ne 0) {
-                    throw "Inno Setup 编译失败，退出码: $isccExitCode"
-                }
-                $setup = Join-Path $ScriptDir "DSH-一键安装-$($global:DSH_VERSION).exe"
-                if (Test-Path $setup) {
-                    $size = [math]::Round((Get-Item $setup).Length / 1MB, 1)
-                    Write-Host "  ✅ 安装包: DSH-一键安装-$($global:DSH_VERSION).exe ($size MB)"
-                } else {
-                    throw "Inno Setup 未生成安装包: $setup"
-                }
-            } finally {
-                Remove-Item $tempIss -Force -ErrorAction SilentlyContinue
+        if (-not $iscc) {
+            throw "未找到 Inno Setup (ISCC.exe)，且无法自动安装。请安装 Inno Setup 后重试。"
+        }
+
+        $issContent = Get-Content $issFile -Raw -Encoding UTF8
+        $issContent = $issContent -replace '(?m)^(#define MyAppVersion ")[^"]*(".*)$', "`${1}$($global:DSH_VERSION)`$2"
+        # Keep the temporary script beside the source ISS. Inno Setup
+        # resolves SetupIconFile, Source, and OutputDir relative to the
+        # ISS file's directory.
+        $tempIss = Join-Path $ScriptDir ".DSH-Build-$([guid]::NewGuid().ToString('N')).iss"
+        try {
+            Set-Content $tempIss -Value $issContent -Encoding UTF8 -NoNewline
+            & $iscc $tempIss
+            $isccExitCode = $LASTEXITCODE
+            if ($isccExitCode -ne 0) {
+                throw "Inno Setup 编译失败，退出码: $isccExitCode"
             }
-        } else {
-            Write-Host "  ⚠️ 未找到 Inno Setup，跳过"
+            $setup = Join-Path $ScriptDir "DSH-一键安装-$($global:DSH_VERSION).exe"
+            if (Test-Path $setup) {
+                $size = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+                Write-Host "  ✅ 安装包: DSH-一键安装-$($global:DSH_VERSION).exe ($size MB)"
+            } else {
+                throw "Inno Setup 未生成安装包: $setup"
+            }
+        } finally {
+            Remove-Item $tempIss -Force -ErrorAction SilentlyContinue
         }
     }
 }

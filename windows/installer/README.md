@@ -4,10 +4,10 @@
 
 ## 前置准备
 
-1. **下载并安装 Inno Setup**
-   - 官网：https://jrsoftware.org/isinfo.php
-   - 直接下载：https://jrsoftware.org/download.php/is.exe
-   - 一路下一步安装即可
+1. **准备 Inno Setup**
+   - 运行 `build.ps1` 时会自动尝试通过 `winget` 或 Chocolatey 安装 Inno Setup
+   - 也可以手动安装：https://jrsoftware.org/download.php/is.exe
+   - 安装后重新运行 `build.ps1`
 
 2. **准备图标（可选）**
    - 把 `icon.ico` 放到本目录（没有会报错，可以先用任意 .ico 文件代替）
@@ -16,10 +16,10 @@
 ## 编译步骤
 
 ```
-1. 双击 DSH-Installer.iss（会自动用 Inno Setup 打开）
-2. 菜单：Build → Compile
-3. 等待编译完成
-4. 生成的文件：DSH-一键安装-1.0.0.exe
+1. 在 PowerShell 7 中进入本目录
+2. 运行 `Set-ExecutionPolicy -Scope Process Bypass`
+3. 运行 `./build.ps1`
+4. 生成的文件：`DSH-一键安装-0.1.0-rc.8.exe`
 ```
 
 ## 生成的安装包功能
