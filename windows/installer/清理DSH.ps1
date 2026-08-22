@@ -8,7 +8,8 @@
 #requires -Version 7
 
 param(
-    [switch]$Force         # 跳过确认，直接清理
+    [switch]$Force,        # 跳过确认，直接清理
+    [string]$Distro        # 可显式指定要清理的 WSL 发行版
 )
 
 $ErrorActionPreference = "Continue"
@@ -20,6 +21,12 @@ $ScriptDir = if ($MyInvocation.MyCommand.Path) {
 } else {
     Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 }
+$SelfPath = if ($PSCommandPath) {
+    $PSCommandPath
+} else {
+    [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+}
+$IsCompiledExecutable = [IO.Path]::GetExtension($SelfPath) -ieq ".exe"
 
 # 加载共享配置
 . (Join-Path $ScriptDir "config.ps1")
@@ -29,14 +36,14 @@ $DSH_HOME     = $global:DSH_HOME
 $AGENT_DIR    = "/agent"           # set_claude_provider_keys.sh 的安装目录
 $DesktopPath  = [Environment]::GetFolderPath("Desktop")
 
-# 自动检测 DSH 安装的 WSL 发行版（命名格式: Ubuntu-24.04-20260821）
-try {
-    $defaultDistro = wsl -l -q 2>&1 | Where-Object { $_ -match "^Ubuntu-\d+\.\d+-\d{8}$" } | Select-Object -First 1
-    if (-not $defaultDistro) { $defaultDistro = "dsh" }
-} catch {
-    $defaultDistro = "dsh"
+# 优先使用安装时记录的精确发行版名称；没有记录时拒绝猜测，避免误删用户发行版。
+if ([string]::IsNullOrWhiteSpace($Distro) -and (Test-Path -LiteralPath $global:DshDistroFile)) {
+    $Distro = (Get-Content -LiteralPath $global:DshDistroFile -Raw -ErrorAction SilentlyContinue).Trim()
 }
-$WSL_DISTRO = $defaultDistro.Trim()
+if ([string]::IsNullOrWhiteSpace($Distro)) {
+    throw "未找到 DSH 发行版记录。请使用 -Distro <发行版名称> 显式指定，避免误删其他 WSL 发行版。"
+}
+$WSL_DISTRO = $Distro.Trim()
 
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════╗" -ForegroundColor Red
@@ -48,7 +55,11 @@ Write-Host ""
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     Write-Host "⚠️  需要管理员权限才能清理，正在重新启动..." -ForegroundColor Yellow
-    Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    if ($IsCompiledExecutable) {
+        Start-Process -FilePath $SelfPath -ArgumentList "-Force" -Verb RunAs
+    } else {
+        Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$SelfPath`"" -Verb RunAs
+    }
     exit
 }
 
@@ -85,9 +96,9 @@ if (-not $deletedShortcut) {
 # ===== 2. 清理 WSL 内的 DSH 源码 =====
 Write-Host "[2/5] 清理 WSL 内的 DSH 源码..."
 try {
-    $wslExists = wsl -l -q 2>&1 | Select-String $WSL_DISTRO
+    $wslExists = wsl -l -q 2>&1 | ForEach-Object { $_.Trim() } | Where-Object { $_ -eq $WSL_DISTRO }
     if ($wslExists) {
-        wsl -d $WSL_DISTRO -- bash -c "if [ -d '$DSH_HOME' ]; then rm -rf '$DSH_HOME'; echo 'deleted'; fi" 2>$null
+        wsl -d $WSL_DISTRO -u root -- bash -c "if [ -d '$DSH_HOME' ]; then rm -rf '$DSH_HOME'; echo 'deleted'; fi" 2>$null
         Write-Host "  ✅ 已删除 WSL 内 DSH 源码" -ForegroundColor Green
     } else {
         Write-Host "  ⏭️  WSL 发行版不存在，跳过" -ForegroundColor Gray
@@ -99,9 +110,9 @@ try {
 # ===== 3. 清理 WSL 内的 /agent 目录（set_claude_provider_keys.sh 的安装目录）=====
 Write-Host "[3/5] 清理 WSL 内的 /agent 目录..."
 try {
-    $wslExists = wsl -l -q 2>&1 | Select-String $WSL_DISTRO
+    $wslExists = wsl -l -q 2>&1 | ForEach-Object { $_.Trim() } | Where-Object { $_ -eq $WSL_DISTRO }
     if ($wslExists) {
-        wsl -d $WSL_DISTRO -- bash -c "if [ -d '$AGENT_DIR' ]; then rm -rf '$AGENT_DIR' 2>/dev/null || sudo rm -rf '$AGENT_DIR'; echo 'deleted'; fi" 2>$null
+        wsl -d $WSL_DISTRO -u root -- bash -c "if [ -d '$AGENT_DIR' ]; then rm -rf '$AGENT_DIR'; echo 'deleted'; fi" 2>$null
         Write-Host "  ✅ 已删除 /agent 目录" -ForegroundColor Green
     } else {
         Write-Host "  ⏭️  WSL 发行版不存在，跳过" -ForegroundColor Gray
@@ -113,10 +124,17 @@ try {
 # ===== 4. 卸载 WSL Ubuntu 发行版 =====
 Write-Host "[4/5] 卸载 WSL 发行版..."
 try {
-    $wslExists = wsl -l -q 2>&1 | Select-String $WSL_DISTRO
+    $wslExists = wsl -l -q 2>&1 | ForEach-Object { $_.Trim() } | Where-Object { $_ -eq $WSL_DISTRO }
     if ($wslExists) {
         wsl --unregister $WSL_DISTRO 2>&1
-        Write-Host "  ✅ 已卸载 WSL 发行版: $WSL_DISTRO" -ForegroundColor Green
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  ✅ 已卸载 WSL 发行版: $WSL_DISTRO" -ForegroundColor Green
+            if (Test-Path -LiteralPath $global:DshDistroFile) {
+                Remove-Item -LiteralPath $global:DshDistroFile -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            Write-Host "  ⚠️  卸载失败，保留发行版记录: $WSL_DISTRO" -ForegroundColor Yellow
+        }
     } else {
         Write-Host "  ⏭️  WSL 发行版不存在，跳过" -ForegroundColor Gray
     }

@@ -27,7 +27,16 @@ $script:DshProviders = @(
 )
 
 # --- 加密存储 ---
-$script:DshTokenFile = Join-Path $env:APPDATA "DSH\tokens.enc"
+$script:DshAppData = if ($env:APPDATA) {
+    $env:APPDATA
+} else {
+    [Environment]::GetFolderPath("ApplicationData")
+}
+if ([string]::IsNullOrWhiteSpace($script:DshAppData)) {
+    throw "无法确定 Windows 用户的 APPDATA 目录。"
+}
+$script:DshTokenFile = Join-Path $script:DshAppData "DSH\tokens.enc"
+$script:DshDistroFile = Join-Path $script:DshAppData "DSH\distro-name.txt"
 
 # --- 导出到全局作用域 ---
 $global:DSH_HOME     = $script:DSH_HOME
@@ -39,3 +48,4 @@ $global:WSL_DISTRO   = $script:WSL_DISTRO
 $global:DSH_VERSION  = $script:DSH_VERSION
 $global:DshProviders = $script:DshProviders
 $global:DshTokenFile = $script:DshTokenFile
+$global:DshDistroFile = $script:DshDistroFile

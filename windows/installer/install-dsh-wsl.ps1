@@ -154,24 +154,39 @@ function Invoke-WslSilent {
     param(
         [Parameter(ValueFromPipeline=$true)]
         [string]$Command,
-        [int]$TimeoutMs = 600000  # 默认10分钟超时
+        [int]$TimeoutMs = 600000,  # 默认10分钟超时
+        [string]$User = "",
+        [AllowEmptyString()][string]$InputText = ""
     )
     process {
         # Base64 编码避免中文乱码（Windows 命令行编码非 UTF-8）
         $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Command))
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = "wsl.exe"
-        $psi.Arguments = "-d $WSL_DISTRO -- bash -c `"echo $b64 | base64 -d | bash`""
+        $userArgument = if ($User) { "-u $User " } else { "" }
+        if ($InputText -ne "") {
+            # Password input is sent directly to chpasswd over stdin; it is not
+            # embedded in the command line or the base64-encoded script.
+            $psi.Arguments = "-d $WSL_DISTRO ${userArgument}-- chpasswd"
+        } else {
+            $psi.Arguments = "-d $WSL_DISTRO ${userArgument}-- bash -c `"echo $b64 | base64 -d | bash`""
+        }
         $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
         $psi.CreateNoWindow = $true
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
+        $psi.RedirectStandardInput = $true
+        $psi.StandardInputEncoding = [Text.Encoding]::UTF8
         $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
         $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
         $psi.Environment["WSL_UTF8"] = "1"
 
         $p = [System.Diagnostics.Process]::Start($psi)
+        if ($InputText -ne "") {
+            $p.StandardInput.Write($InputText)
+        }
+        $p.StandardInput.Close()
         $outTask = $p.StandardOutput.ReadToEndAsync()
         $errTask = $p.StandardError.ReadToEndAsync()
         if (-not $p.WaitForExit($TimeoutMs)) {
@@ -408,39 +423,79 @@ function Start-Part1-WSL {
             }
         }
 
-        # 创建用户 dsh（密码 123456），设 sudo 权限，设默认用户，配置免密码sudo
-        Write-Host "  创建 dsh 用户（密码: 123456）..."
+        if ($isNewInstall) {
+        # 由用户设置 WSL root 密码；密码只通过标准输入传递，不写入命令行、日志或文件。
+        Write-Host "  设置 WSL root 密码..."
+        $rootPassword = Read-Host "请输入 WSL root 密码（不会显示，至少 8 个字符）" -AsSecureString
+        $rootPasswordConfirm = Read-Host "请再次输入 WSL root 密码" -AsSecureString
+        $rootBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($rootPassword)
+        $rootConfirmBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($rootPasswordConfirm)
+        try {
+            $rootPlain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($rootBstr)
+            $rootConfirmPlain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($rootConfirmBstr)
+            if ($rootPlain.Length -lt 8 -or $rootPlain -cne $rootConfirmPlain) {
+                throw "root 密码至少需要 8 个字符，且两次输入必须一致。"
+            }
+            $passwordResult = Invoke-WslSilent -Command "chpasswd" -User root -InputText "root:$rootPlain`n"
+            if ($passwordResult.Trim()) {
+                throw "设置 root 密码失败: $passwordResult"
+            }
+        } finally {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($rootBstr)
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($rootConfirmBstr)
+            $rootPlain = $null
+            $rootConfirmPlain = $null
+            $rootPassword = $null
+            $rootPasswordConfirm = $null
+        }
+        } else {
+            Write-Host "  已有 DSH WSL 发行版，保留现有 root 密码。"
+        }
+
+        # 创建无登录密码的 dsh 用户；日常服务不以 root 运行。
+        Write-Host "  创建 dsh 用户（禁用密码登录）..."
         @"
 #!/bin/bash
 set -e
 useradd -m -s /bin/bash dsh 2>/dev/null || true
-echo "dsh:123456" | chpasswd
-usermod -aG sudo dsh
-echo "dsh ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/dsh
-chmod 440 /etc/sudoers.d/dsh
+passwd -l dsh >/dev/null 2>&1 || true
 echo "[user]" > /etc/wsl.conf
 echo "default=dsh" >> /etc/wsl.conf
 echo USER-SETUP-OK
-"@ | wsl -d $dshName -- bash 2>&1 | Out-Null
+"@ | wsl -d $dshName -u root -- bash 2>&1 | Out-Null
 
         # 重启 WSL 让 wsl.conf 的默认用户生效
         Write-Host "  重启 WSL 让默认用户生效..."
         wsl --terminate $dshName 2>&1 | Out-Null
         Start-Sleep -Seconds 2
 
-        $userCheck = wsl -d $dshName -- bash -c "id dsh 2>&1 && sudo -n true 2>&1 && echo USER-OK"
+        $userCheck = wsl -d $dshName -- bash -c "id dsh 2>&1 && echo USER-OK"
         if ($userCheck -match "USER-OK") {
-            Write-Host "  dsh 用户已创建（含免密sudo）" -ForegroundColor Green
+            Write-Host "  dsh 用户已创建（密码登录已锁定）" -ForegroundColor Green
         } else {
             Write-Host "  警告: dsh 用户配置可能不完整: $userCheck" -ForegroundColor Yellow
         }
     }
+
+    # 清理旧版本可能遗留的 dsh sudo 权限，并确保服务账户不可密码登录。
+    $hardenDsh = @'
+#!/bin/bash
+set -e
+if id dsh >/dev/null 2>&1; then
+    passwd -l dsh >/dev/null 2>&1 || true
+    gpasswd -d dsh sudo >/dev/null 2>&1 || true
+fi
+rm -f /etc/sudoers.d/dsh
+'@
+    $hardenDsh | Invoke-WslSilent -User root
 
     # 设为默认
     wsl --set-default $dshName 2>&1 | Out-Null
     $script:WSL_DISTRO = $dshName
     $global:WSL_DISTRO = $dshName
     $WSL_DISTRO = $dshName
+    New-Item -ItemType Directory -Path (Split-Path $global:DshDistroFile -Parent) -Force | Out-Null
+    Set-Content -LiteralPath $global:DshDistroFile -Value $dshName -Encoding UTF8 -NoNewline
     if ($isNewInstall) {
         if ($userHasTarget) {
             Test-OK "WSL 发行版已创建: $dshName（你原有的 $targetName 完全未动）"
@@ -468,18 +523,18 @@ echo USER-SETUP-OK
 
     # 1.8 配置 WSL 基础环境
     Write-Host "[1.8] 配置 WSL 基础环境..."
-    $setupScript = @'
+$setupScript = @'
 #!/bin/bash
-set -e
+set -euo pipefail
 echo ">>> 更新 apt 源..."
-sudo apt update -qq
+apt update -qq
 
 echo ">>> 安装基础依赖..."
-sudo apt install -y -qq curl git wget ca-certificates gnupg unzip 2>&1 | tail -1
+apt install -y -qq curl git wget ca-certificates gnupg unzip 2>&1 | tail -1
 
 echo ">>> 基础环境配置完成"
 '@
-    $setupScript | Invoke-WslSilent
+    $setupScript | Invoke-WslSilent -User root
     Test-OK "WSL 基础环境配置完成"
 
     Write-Host ""
@@ -503,50 +558,50 @@ function Start-Part2-DSH {
 
     # 2.1 安装 Node.js
     Write-Host "[2.1] 安装 Node.js v$NODE_VERSION..."
-    $nodeInstall = @"
+$nodeInstall = @"
 #!/bin/bash
-set -e
+set -euo pipefail
 if command -v node &>/dev/null; then
     echo "  Node.js 已安装: `$(node -v)"
 else
     echo "  正在安装 Node.js v$NODE_VERSION..."
-    curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | sudo -E bash - 2>&1 | tail -1
-    sudo apt install -y -qq nodejs 2>&1 | tail -1
+    curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash 2>&1 | tail -1
+    apt install -y -qq nodejs 2>&1 | tail -1
     echo "  Node.js 安装完成: `$(node -v)"
 fi
 "@
-    $nodeInstall | Invoke-WslSilent
+    $nodeInstall | Invoke-WslSilent -User root
     $nodeVersion = Invoke-WslSilent "node -v"
     Test-OK "Node.js: $nodeVersion"
 
     # 2.2 启用 Corepack（pnpm）
     Write-Host "[2.2] 启用 pnpm（通过 Corepack）..."
-    $pnpmInstall = @"
+$pnpmInstall = @"
 #!/bin/bash
-set -e
+set -euo pipefail
 if command -v pnpm &>/dev/null; then
     echo "  pnpm 已安装: `$(pnpm -v)"
 else
     echo "  启用 Corepack..."
-    sudo corepack enable 2>&1
+    corepack enable 2>&1
     echo "  pnpm 已启用: `$(pnpm -v)"
 fi
 "@
-    $pnpmInstall | Invoke-WslSilent
+    $pnpmInstall | Invoke-WslSilent -User root
     $pnpmVersion = Invoke-WslSilent "pnpm -v"
     Test-OK "pnpm: $pnpmVersion"
 
     # 2.3 检查 git
     Write-Host "[2.3] 检查 git..."
-    $gitCheck = @"
+$gitCheck = @"
 #!/bin/bash
-set -e
+set -euo pipefail
 if ! command -v git &>/dev/null; then
-    sudo apt install -y -qq git
+    apt install -y -qq git
 fi
 echo "git `$(git --version | awk '{print `$3}')"
 "@
-    $gitVersion = Invoke-WslSilent $gitCheck
+    $gitVersion = Invoke-WslSilent $gitCheck -User root
     Test-OK "git: $gitVersion"
 
     # 2.4 克隆 DSH 仓库
@@ -575,9 +630,9 @@ echo "  最新提交: `$(git log -1 --oneline)"
     # 2.5 安装依赖
     Write-Host "[2.5] 安装 npm 依赖（pnpm install，需几分钟）..."
     Write-Host "  (这可能需要 3-6 分钟，请耐心等待...)"
-    $installDeps = @"
+$installDeps = @"
 #!/bin/bash
-set -e
+set -euo pipefail
 cd "$DSH_HOME"
 pnpm install 2>&1 | tail -5
 echo "INSTALL-OK"
@@ -593,9 +648,9 @@ echo "INSTALL-OK"
     # 2.6 构建 DSH
     Write-Host "[2.6] 构建 DSH（pnpm run build，需几分钟）..."
     Write-Host "  (TypeScript 编译 + 打包，约 2-5 分钟...)"
-    $buildDSH = @"
+$buildDSH = @"
 #!/bin/bash
-set -e
+set -euo pipefail
 cd "$DSH_HOME"
 pnpm run build 2>&1 | tail -10
 echo "BUILD-OK"
@@ -685,24 +740,96 @@ function Start-Part3-Config {
 
     # 3.2 配置 DSH 环境变量
     Write-Host "[3.2] 配置 DSH 环境变量..."
-    $setupEnv = @"
+    $setupEnv = @'
 #!/bin/bash
 set -e
-cat >> ~/.bashrc << 'BASHRC_EOF'
-
-# === DeepSeek Harness 环境 ===
-export DSH_HOME="$DSH_HOME"
-export PATH="`$DSH_HOME/node_modules/.bin:`$PATH"
-alias dsh='cd `$DSH_HOME && pnpm dsh'
-alias dsh-web='cd `$DSH_HOME && pnpm dsh web'
-alias dsh-build='cd `$DSH_HOME && pnpm run build'
-alias dsh-update='cd `$DSH_HOME && git pull && pnpm install && pnpm run build'
-echo "[DSH] 已加载 DeepSeek Harness 环境"
-echo "  启动 Web: dsh-web"
-echo "  更新 DSH: dsh-update"
-BASHRC_EOF
-echo "环境变量已写入 ~/.bashrc"
-"@
+readonly DSH_ENV_HOME="__DSH_HOME__"
+readonly BASHRC_FILE="${HOME}/.bashrc"
+readonly BEGIN_MARKER="# BEGIN DeepSeek Harness environment"
+readonly END_MARKER="# END DeepSeek Harness environment"
+mkdir -p "$(dirname "$BASHRC_FILE")"
+tmp_file="$(mktemp "${BASHRC_FILE}.tmp.XXXXXX")"
+input_file="$BASHRC_FILE"
+if [ ! -f "$input_file" ]; then input_file=/dev/null; fi
+  awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
+    BEGIN { skipping = 0; legacy = 0; replaced = 0 }
+    $0 == "# === DeepSeek Harness 环境 ===" { legacy = 1; next }
+    legacy && $0 == "echo \"  更新 DSH: dsh-update\"" { legacy = 0; next }
+    legacy { next }
+    $0 == begin {
+      if (!replaced) {
+        print begin
+        print "export DSH_ENV_HOME=\"__DSH_HOME__\""
+        print "dsh_prepend_path() {"
+        print "  local entry rest clean=\"\""
+        print "  rest=\"${PATH:-}\""
+        print "  while [[ -n \"${rest}\" ]]; do"
+        print "    case \"${rest}\" in"
+        print "      *:*) entry=${rest%%:*}; rest=${rest#*:} ;;"
+        print "      *) entry=${rest}; rest=\"\" ;;"
+        print "    esac"
+        print "    [[ \"${entry}\" == \"${DSH_ENV_HOME}/node_modules/.bin\" || -z \"${entry}\" ]] && continue"
+        print "    [[ -n \"${clean}\" ]] && clean+=:"
+        print "    clean+=${entry}"
+        print "  done"
+        print "  PATH=\"${DSH_ENV_HOME}/node_modules/.bin${clean:+:${clean}}\""
+        print "  export PATH"
+        print "}"
+        print "dsh_prepend_path"
+        print "unset -f dsh_prepend_path"
+        print "export DSH_HOME=\"${DSH_ENV_HOME}\""
+        print "alias dsh=\"cd \\\"${DSH_ENV_HOME}\\\" && pnpm dsh\""
+        print "alias dsh-web=\"cd \\\"${DSH_ENV_HOME}\\\" && pnpm dsh web\""
+        print "alias dsh-build=\"cd \\\"${DSH_ENV_HOME}\\\" && pnpm run build\""
+        print "alias dsh-update=\"cd \\\"${DSH_ENV_HOME}\\\" && git pull && pnpm install && pnpm run build\""
+        print end
+        replaced = 1
+      }
+      skipping = 1
+      next
+    }
+    skipping && $0 == end { skipping = 0; next }
+    !skipping { print }
+    END {
+      if (!replaced) {
+        if (NR > 0) print ""
+        print begin
+        print "export DSH_ENV_HOME=\"__DSH_HOME__\""
+        print "dsh_prepend_path() {"
+        print "  local entry rest clean=\"\""
+        print "  rest=\"${PATH:-}\""
+        print "  while [[ -n \"${rest}\" ]]; do"
+        print "    case \"${rest}\" in"
+        print "      *:*) entry=${rest%%:*}; rest=${rest#*:} ;;"
+        print "      *) entry=${rest}; rest=\"\" ;;"
+        print "    esac"
+        print "    [[ \"${entry}\" == \"${DSH_ENV_HOME}/node_modules/.bin\" || -z \"${entry}\" ]] && continue"
+        print "    [[ -n \"${clean}\" ]] && clean+=:"
+        print "    clean+=${entry}"
+        print "  done"
+        print "  PATH=\"${DSH_ENV_HOME}/node_modules/.bin${clean:+:${clean}}\""
+        print "  export PATH"
+        print "}"
+        print "dsh_prepend_path"
+        print "unset -f dsh_prepend_path"
+        print "export DSH_HOME=\"${DSH_ENV_HOME}\""
+        print "alias dsh=\"cd \\\"${DSH_ENV_HOME}\\\" && pnpm dsh\""
+        print "alias dsh-web=\"cd \\\"${DSH_ENV_HOME}\\\" && pnpm dsh web\""
+        print "alias dsh-build=\"cd \\\"${DSH_ENV_HOME}\\\" && pnpm run build\""
+        print "alias dsh-update=\"cd \\\"${DSH_ENV_HOME}\\\" && git pull && pnpm install && pnpm run build\""
+        print end
+      }
+    }
+  ' "$input_file" > "$tmp_file"
+if [ -f "$BASHRC_FILE" ]; then
+  chmod --reference="$BASHRC_FILE" "$tmp_file" 2>/dev/null || true
+else
+  chmod 600 "$tmp_file"
+fi
+mv -f "$tmp_file" "$BASHRC_FILE"
+echo "环境变量已幂等写入 ~/.bashrc"
+'@
+    $setupEnv = $setupEnv.Replace('__DSH_HOME__', $DSH_HOME)
     Invoke-WslSilent $setupEnv
     Test-OK "DSH 环境变量已配置"
 

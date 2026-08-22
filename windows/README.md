@@ -54,6 +54,10 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 .\install-dsh-wsl.ps1
 ```
 
+首次创建新的 DSH WSL 发行版时，安装程序会以隐藏输入方式要求设置两次 root 密码（至少 8 个字符）。
+密码只通过标准输入交给 WSL 的 `chpasswd`，不会写入安装脚本、日志或配置文件；`dsh` 日常账户不设置可登录密码，
+服务也不会以 root 身份运行。已有 DSH 发行版不会重复重置 root 密码。
+
 ### 获取或构建安装包
 
 普通用户无需在本地编译。可以按下面步骤下载 CI 已构建的安装包：

@@ -57,6 +57,9 @@
 安装 WSL → 装 DSH → 配置 → 验证
 ```
 
+首次创建新的 WSL 发行版时，安装程序会隐藏提示用户设置并确认 root 密码。密码不会写入脚本、日志或配置文件，
+只通过标准输入设置到 WSL；日常 `dsh` 用户密码保持锁定，DSH 服务不以 root 运行。
+
 ## 构建故障排查
 
 - `[Languages]` 使用 Inno Setup 编译器内置的 `compiler:Default.isl`

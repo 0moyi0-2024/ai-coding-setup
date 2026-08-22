@@ -84,7 +84,12 @@ Write-Host "[2] 编译 PS1 → EXE..."
 $iconFile = Join-Path $ScriptDir "icon.ico"
 
 function Compile-PS1 {
-    param([string]$Source, [string]$Output, [bool]$NoConsole = $false)
+    param(
+        [string]$Source,
+        [string]$Output,
+        [bool]$NoConsole = $false,
+        [bool]$RequireAdmin = $false
+    )
 
     if (-not (Test-Path $Source)) {
         Write-Host "  ⚠️  跳过 $Output（源文件不存在）" -ForegroundColor Yellow
@@ -112,6 +117,7 @@ function Compile-PS1 {
         outputFile = $Output
     }
     if ($NoConsole) { $args['noConsole'] = $true }
+    if ($RequireAdmin) { $args['requireAdmin'] = $true }
     if (Test-Path $iconFile) { $args['iconFile'] = $iconFile }
 
     try {
@@ -148,8 +154,8 @@ function Compile-PS1 {
 }
 
 $ok = $true
-if (-not (Compile-PS1 (Join-Path $ScriptDir "install-dsh-wsl.ps1") (Join-Path $ScriptDir "DSH-一键安装.exe"))) { $ok = $false }
-if (-not (Compile-PS1 (Join-Path $ScriptDir "清理DSH.ps1") (Join-Path $ScriptDir "清理DSH.exe"))) { $ok = $false }
+if (-not (Compile-PS1 (Join-Path $ScriptDir "install-dsh-wsl.ps1") (Join-Path $ScriptDir "DSH-一键安装.exe") -RequireAdmin $true)) { $ok = $false }
+if (-not (Compile-PS1 (Join-Path $ScriptDir "清理DSH.ps1") (Join-Path $ScriptDir "清理DSH.exe") -RequireAdmin $true)) { $ok = $false }
 if (-not (Compile-PS1 (Join-Path $ScriptDir "DSH-Tray.ps1") (Join-Path $ScriptDir "DSH-Tray.exe") -NoConsole $true)) { $ok = $false }
 
 if (-not $ok) {
