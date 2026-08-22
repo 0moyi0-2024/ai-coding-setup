@@ -35,7 +35,6 @@ WizardStyle=modern
 
 ; 需要管理员权限（安装 WSL 必须）
 PrivilegesRequired=admin
-PrivilegesRequiredOverridesAllowed=dialog
 
 [Languages]
 Name: "chinese"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
@@ -85,7 +84,7 @@ Name: "{group}\查看说明"; Filename: "{app}\uninstall-notes.txt"
 Name: "{group}\卸载 DSH"; Filename: "{uninstallexe}"
 
 ; 桌面快捷方式（托盘管理器）
-Name: "{commondesktop}\DeepSeek Harness (DSH)"; Filename: "{app}\DSH-Tray.exe"; WorkingDir: "{app}"; Comment: "DSH 托盘管理器 - 右键启动/停止"; Tasks: desktopicon
+Name: "{userdesktop}\DeepSeek Harness (DSH)"; Filename: "{app}\DSH-Tray.exe"; WorkingDir: "{app}"; Comment: "DSH 托盘管理器 - 右键启动/停止"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式选项："; Flags: checkedonce
