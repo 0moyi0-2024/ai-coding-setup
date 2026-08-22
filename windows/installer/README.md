@@ -22,6 +22,8 @@
 4. 生成的文件：`DSH-一键安装-0.1.0-rc.8.exe`
 ```
 
+构建生成的 `.exe` 不提交到源码仓库。GitHub Actions 会将它们上传为构建 Artifact，并在发布 Release 时附加安装包。
+
 ## 生成的安装包功能
 
 | 功能 | 说明 |
@@ -53,6 +55,6 @@
 
 ## 注意
 
-- `[Languages]` 使用 Inno Setup 编译器内置的 `compiler:Default.isl`，中文使用 `compiler:Languages\ChineseSimplified.isl`
-- 如果使用精简版 Inno Setup 且没有中文语言包，`build.ps1` 会自动回退为英文界面
+- `[Languages]` 使用 Inno Setup 编译器内置的 `compiler:Default.isl`
+- 如果本机没有中文语言包，`build.ps1` 会从 Inno Setup 官方仓库下载临时语言文件；网络不可用时自动回退为英文界面
 - 安装路径不要有中文和空格，否则脚本可能出错

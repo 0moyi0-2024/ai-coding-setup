@@ -12,6 +12,7 @@ param([switch]$SkipInnoSetup)
 # 不使用 Stop 模式，改为显式检查每个步骤
 $ErrorActionPreference = "Continue"
 $ScriptDir = $PSScriptRoot
+$ChineseLanguageUrl = "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl"
 
 Write-Host "=== 构建开始 ==="
 Write-Host "ScriptDir: $ScriptDir"
@@ -235,8 +236,30 @@ if (-not $SkipInnoSetup) {
             throw "Inno Setup 默认语言文件不存在: $defaultLanguage"
         }
         if (-not (Test-Path -LiteralPath $chineseLanguage -PathType Leaf)) {
-            Write-Host "  ⚠️ 未找到中文语言包，将使用英文界面: $chineseLanguage" -ForegroundColor Yellow
-            $issContent = $issContent -replace '(?m)^Name: "chinese";.*\r?\n?', ''
+            Write-Host "  未找到中文语言包，尝试从 Inno Setup 官方仓库下载..." -ForegroundColor Yellow
+            $tempChineseLanguage = Join-Path $env:TEMP "dsh-build-$([guid]::NewGuid().ToString('N'))-ChineseSimplified.isl"
+            try {
+                Invoke-WebRequest -Uri $ChineseLanguageUrl -OutFile $tempChineseLanguage -UseBasicParsing -ErrorAction Stop
+                $languageContent = if (Test-Path -LiteralPath $tempChineseLanguage -PathType Leaf) {
+                    Get-Content -LiteralPath $tempChineseLanguage -Raw -Encoding UTF8
+                }
+                if ($null -eq $languageContent
+                    -or $languageContent.Length -lt 1024
+                    -or $languageContent -notmatch '(?m)^\[LangOptions\]'
+                    -or $languageContent -notmatch '(?m)^\[Messages\]') {
+                    throw "下载的中文语言包无效"
+                }
+                Write-Host "  ✅ 已下载官方中文语言包"
+                $languageLine = 'Name: "chinese"; MessagesFile: "' + $tempChineseLanguage + '"'
+                $issContent = $issContent -replace '(?m)^Name: "chinese";.*$', $languageLine
+            } catch {
+                Write-Host "  ⚠️ 中文语言包下载失败，将使用英文界面: $($_.Exception.Message)" -ForegroundColor Yellow
+                $issContent = $issContent -replace '(?m)^Name: "chinese";.*\r?\n?', ''
+                if ($tempChineseLanguage) {
+                    Remove-Item $tempChineseLanguage -Force -ErrorAction SilentlyContinue
+                    $tempChineseLanguage = $null
+                }
+            }
         }
         # Keep the temporary script beside the source ISS. Inno Setup
         # resolves SetupIconFile, Source, and OutputDir relative to the
@@ -258,6 +281,9 @@ if (-not $SkipInnoSetup) {
             }
         } finally {
             Remove-Item $tempIss -Force -ErrorAction SilentlyContinue
+            if ($tempChineseLanguage) {
+                Remove-Item $tempChineseLanguage -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }
