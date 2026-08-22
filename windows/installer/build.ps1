@@ -243,10 +243,8 @@ if (-not $SkipInnoSetup) {
                 $languageContent = if (Test-Path -LiteralPath $tempChineseLanguage -PathType Leaf) {
                     Get-Content -LiteralPath $tempChineseLanguage -Raw -Encoding UTF8
                 }
-                if ($null -eq $languageContent
-                    -or $languageContent.Length -lt 1024
-                    -or $languageContent -notmatch '(?m)^\[LangOptions\]'
-                    -or $languageContent -notmatch '(?m)^\[Messages\]') {
+                $languageValid = $null -ne $languageContent -and $languageContent.Length -ge 1024 -and $languageContent -match '(?m)^\[LangOptions\]' -and $languageContent -match '(?m)^\[Messages\]'
+                if (-not $languageValid) {
                     throw "下载的中文语言包无效"
                 }
                 Write-Host "  ✅ 已下载官方中文语言包"
