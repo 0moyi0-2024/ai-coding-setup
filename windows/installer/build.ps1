@@ -17,10 +17,11 @@ $ScriptDir = $PSScriptRoot
 
 # 从 config.ps1 里的版本号派生 exe 四段式版本
 # "0.1.0-rc.8" → "0.1.0.8"；"1.2.3" → "1.2.3.0"
-$exeVersion = $global:DSH_VERSION -replace '^(\d+\.\d+\.\d+)(?:-.*)?(\d+)?$', {
-    $base = $matches[1]
-    $build = if ($matches[2]) { $matches[2] } else { "0" }
-    "$base.$build"
+$verParts = $global:DSH_VERSION -split '[.-]'
+$exeVersion = "$($verParts[0]).$($verParts[1]).$($verParts[2]).0"
+# 如果有第4段数字（如 rc.8 的 8），用它替代最后的 0
+if ($verParts.Count -ge 5 -and $verParts[4] -match '^\d+$') {
+    $exeVersion = "$($verParts[0]).$($verParts[1]).$($verParts[2]).$($verParts[4])"
 }
 
 Write-Host ""
@@ -35,8 +36,9 @@ Write-Host "[1/3] 编译 PowerShell → EXE..." -ForegroundColor Yellow
 $ps2exe = Get-Module -ListAvailable -Name ps2exe
 if (-not $ps2exe) {
     Write-Host "  安装 PS2EXE 模块..."
-    Install-Module -Name ps2exe -Force -AllowClobber -Scope CurrentUser
+    Install-Module -Name ps2exe -Force -AllowClobber -Scope CurrentUser -Repository PSGallery
 }
+Import-Module ps2exe -Force
 
 $iconFile = Join-Path $ScriptDir "icon.ico"
 
@@ -57,8 +59,7 @@ function Compile-PS1 {
         product     = "DeepSeek Harness"
         version     = $exeVersion
         noConsole   = $NoConsole
-        x64         = $true
-        noOutput    = $true
+        noConfigFile = $false
     }
     if (Test-Path $iconFile) { $params['iconFile'] = $iconFile }
 

@@ -42,16 +42,16 @@ jobs:
       - name: 安装 Inno Setup
         run: |
           choco install innosetup -y --no-progress --limit-output
+          # 刷新 PATH，让 ISCC.exe 在后续脚本中可被直接调用
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
           Write-Host "Inno Setup 安装完成"
-          # 验证 ISCC.exe 可被脚本找到
-          if (Test-Path "${env:ProgramFiles}\Inno Setup 6\ISCC.exe") {
-            Write-Host "  ISCC: ${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
-          } elseif (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") {
-            Write-Host "  ISCC: ${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (Get-Command iscc -ErrorAction SilentlyContinue) {
+            Write-Host "  iscc 已在 PATH 中"
           } else {
-            Write-Host "  ⚠️ 未找到 ISCC.exe，尝试搜索..."
-            Get-ChildItem "C:\Program Files\Inno Setup 6\ISCC.exe" -ErrorAction SilentlyContinue
-            Get-ChildItem "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" -ErrorAction SilentlyContinue
+            Write-Host "  ⚠️ iscc 不在 PATH，搜索路径..."
+            $p = Get-ChildItem "C:\Program Files*\Inno Setup 6\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($p) { Write-Host "  找到: $p"; $env:Path += ";$($p.DirectoryName)" }
+            else { Write-Host "  ❌ 未找到 ISCC.exe" }
           }
 
       # =================================================================
@@ -59,10 +59,11 @@ jobs:
       # =================================================================
       - name: 安装 PS2EXE 模块
         run: |
-          # 避免交互式提示
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-          Install-Module -Name ps2exe -Force -AllowClobber -Scope CurrentUser
-          Write-Host "PS2EXE 模块安装完成: $(Get-Module -ListAvailable -Name ps2exe | Select-Object -First 1 | ForEach-Object { "$($_.Name) $($_.Version)" })"
+          Install-Module -Name ps2exe -Force -AllowClobber -Scope CurrentUser -Repository PSGallery
+          Import-Module ps2exe -Force
+          $m = Get-Module ps2exe | Select-Object -First 1
+          Write-Host "PS2EXE 模块安装完成: $($m.Name) $($m.Version)"
 
       # =================================================================
       # Step 4: 运行构建
