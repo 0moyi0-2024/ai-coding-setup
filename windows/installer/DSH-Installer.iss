@@ -95,7 +95,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Filename: "{app}\{#MyAppExeName}"; Description: "立即开始安装 DSH"; Flags: postinstall nowait skipifsilent shellexec
 
 [UninstallRun]
-Filename: "{cmd}"; Parameters: "/c echo 卸载完成。DSH 安装目录 {app} 中的文件已删除。如果 WSL 发行版不再需要，请运行 清理DSH.exe 自动清理"; Flags: runhidden
+Filename: "{cmd}"; Parameters: "/c echo 卸载完成。DSH 安装目录 {app} 中的文件已删除。如果 WSL 发行版不再需要，请运行 清理DSH.exe 自动清理"; Flags: runhidden; RunOnceId: "DSHUninstallMessage"
 
 [Code]
 function InitializeSetup: Boolean;

@@ -20,7 +20,7 @@
 4. 生成的文件：`DSH-一键安装-0.1.0-rc.8.exe`
 ```
 
-构建生成的 `.exe` 不提交到源码仓库。GitHub Actions 会将它们上传为 `DSH-Windows-Installer` Artifact，并在发布 Release 时附加安装包。
+构建生成的 `.exe` 不提交到源码仓库。GitHub Actions 会将它们上传为 `DSH-Windows-Installer` Artifact，并在发布 Release 时附加安装包。发布 Release 时请使用语义化版本标签，例如 `v0.1.0-rc.9`；workflow 会自动用该标签作为安装包版本。
 
 ## 下载 CI 安装包
 

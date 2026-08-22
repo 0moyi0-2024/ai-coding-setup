@@ -63,7 +63,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 3. 滚动到页面底部的 **Artifacts** 区域，点击 `DSH-Windows-Installer` 下载 ZIP 文件。
 4. 解压 ZIP 文件，运行其中的 `DSH-一键安装-<版本号>.exe`；也可以先单独运行 `DSH-一键安装.exe`、`DSH-Tray.exe` 或 `清理DSH.exe`。
 
-Artifacts 通常需要登录 GitHub 才能下载。发布正式 Release 时，完整安装包也会附加在 [Releases 页面](https://github.com/0moyi0-2024/ai-coding-setup/releases)，可直接下载。
+Artifacts 通常需要登录 GitHub 才能下载。发布正式 Release 时，请使用 `v0.1.0-rc.9` 这类语义化版本标签；完整安装包会附加在 [Releases 页面](https://github.com/0moyi0-2024/ai-coding-setup/releases)，并自动使用标签版本号。
 
 开发者需要本地构建时，在 PowerShell 7 中运行：
 

@@ -66,14 +66,29 @@ jobs:
           Write-Host "PS2EXE 模块安装完成: $($m.Name) $($m.Version)"
 
       # =================================================================
-      # Step 4: 运行构建
+      # Step 4: Release 使用标签作为安装包版本
+      # =================================================================
+      - name: 设置 Release 构建版本
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $version = $env:RELEASE_TAG -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+            throw "Release 标签必须是语义版本，例如 v0.1.0-rc.9；当前值: $($env:RELEASE_TAG)"
+          }
+          "DSH_BUILD_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Release 构建版本: $version"
+
+      # =================================================================
+      # Step 5: 运行构建
       # =================================================================
       - name: 构建 DSH Windows 安装包
         working-directory: windows/installer
         run: ./build.ps1
 
       # =================================================================
-      # Step 5: 验证输出文件
+      # Step 6: 验证输出文件
       # =================================================================
       - name: 列出构建产物
         working-directory: windows/installer
@@ -88,7 +103,7 @@ jobs:
           Write-Host "=============================="
 
       # =================================================================
-      # Step 6: 上传构建产物（每次 push 都保留）
+      # Step 7: 上传构建产物（每次 push 都保留）
       # =================================================================
       - name: 上传 Artifacts
         uses: actions/upload-artifact@v4
@@ -103,7 +118,7 @@ jobs:
             windows/installer/清理DSH.exe
 
       # =================================================================
-      # Step 7: 发布 Release 时自动附加安装包
+      # Step 8: 发布 Release 时自动附加安装包
       # =================================================================
       - name: 上传到 GitHub Release
         if: github.event_name == 'release'

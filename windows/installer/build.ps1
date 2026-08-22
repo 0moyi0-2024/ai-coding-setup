@@ -3,11 +3,14 @@
     DSH 一键构建脚本
 .DESCRIPTION
     自动完成：编译 ps1→exe → 编译 Inno Setup → 输出安装包
-    用法: .\build.ps1 [-SkipInnoSetup]
+    用法: .\build.ps1 [-SkipInnoSetup] [-Version <版本号>]
 #>
 #requires -Version 7
 
-param([switch]$SkipInnoSetup)
+param(
+    [switch]$SkipInnoSetup,
+    [string]$Version = $env:DSH_BUILD_VERSION
+)
 
 # 不使用 Stop 模式，改为显式检查每个步骤
 $ErrorActionPreference = "Continue"
@@ -25,6 +28,16 @@ try {
 } catch {
     Write-Host "  ❌ config.ps1 加载失败: $_" -ForegroundColor Red
     exit 1
+}
+
+if ($Version) {
+    $Version = $Version.Trim() -replace '^v', ''
+    if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+        Write-Host "  ❌ 版本号格式无效: $Version" -ForegroundColor Red
+        exit 1
+    }
+    $global:DSH_VERSION = $Version
+    Write-Host "  ✅ 使用构建版本: $global:DSH_VERSION"
 }
 
 # 派生 exe 四段式版本号
@@ -231,6 +244,16 @@ if (-not $SkipInnoSetup) {
 
         $issContent = Get-Content $issFile -Raw -Encoding UTF8
         $issContent = $issContent -replace '(?m)^(#define MyAppVersion ")[^"]*(".*)$', "`${1}$($global:DSH_VERSION)`$2"
+        $tempConfig = $null
+        if ($Version) {
+            $configContent = Get-Content (Join-Path $ScriptDir "config.ps1") -Raw -Encoding UTF8
+            $configContent = $configContent -replace '(?m)^(\$script:DSH_VERSION\s*=\s*)"[^"]*"', ('${1}"' + $global:DSH_VERSION + '"')
+            $tempConfig = Join-Path $ScriptDir ".DSH-Build-config-$([guid]::NewGuid().ToString('N')).ps1"
+            Set-Content $tempConfig -Value $configContent -Encoding UTF8 -NoNewline
+            $tempConfigName = Split-Path $tempConfig -Leaf
+            $issContent = $issContent -replace 'Source: "config\.ps1"; DestDir: "\{app\}"', ('Source: "' + $tempConfigName + '"; DestDir: "{app}"; DestName: "config.ps1"')
+            $issContent = $issContent -replace 'Source: "config\.ps1"; DestDir: "\{app\}\\source"', ('Source: "' + $tempConfigName + '"; DestDir: "{app}\source"; DestName: "config.ps1"')
+        }
         $compilerDir = Split-Path -Parent $iscc
         $defaultLanguage = Join-Path $compilerDir "Default.isl"
         $chineseLanguage = Join-Path $compilerDir "Languages\ChineseSimplified.isl"
@@ -281,6 +304,9 @@ if (-not $SkipInnoSetup) {
             }
         } finally {
             Remove-Item $tempIss -Force -ErrorAction SilentlyContinue
+            if ($tempConfig) {
+                Remove-Item $tempConfig -Force -ErrorAction SilentlyContinue
+            }
             if ($tempChineseLanguage) {
                 Remove-Item $tempChineseLanguage -Force -ErrorAction SilentlyContinue
             }
