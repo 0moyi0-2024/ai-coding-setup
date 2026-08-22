@@ -26,7 +26,8 @@
 在本目录执行：
 
 ```bash
-cd /mnt/d/agent/ai-coding-setup/linux_server/dsh_server
+# 在你 clone 的仓库目录中执行；将路径替换为实际位置
+cd /path/to/ai-coding-setup/linux_server/dsh_server
 chmod 755 start_dsh_service.sh
 ./start_dsh_service.sh install
 ```
@@ -80,21 +81,23 @@ journalctl -u dsh-web.service -f
 
 ## 配置覆盖
 
-脚本默认使用以下配置：
+脚本默认从当前环境探测 `dsh` 和 `node`，并使用当前用户的 DSH 目录：
 
 ```text
-DSH_BIN=/agent/node/bin/dsh
-DSH_HOME=/root/.dsh
+DSH_BIN=PATH 中的 dsh
+DSH_HOME=$HOME/.dsh
 DSH_HOST=127.0.0.1
 DSH_WORKDIR=当前执行目录
-NODE_BIN_DIR=/agent/node/bin
+NODE_BIN_DIR=PATH 中 node 所在目录
 ```
 
 改用指定工作目录：
 
 ```bash
-DSH_WORKDIR=/mnt/d/agent/ai-coding-setup/linux_server ./start_dsh_service.sh install
+DSH_WORKDIR=/path/to/ai-coding-setup/linux_server ./start_dsh_service.sh install
 ```
+
+如果 `dsh` 或 `node` 不在 PATH 中，请显式指定 `DSH_BIN` 和 `NODE_BIN_DIR`。
 
 ## 卸载
 
@@ -117,4 +120,4 @@ curl -i "http://127.0.0.1:${port}/"
 
 如果 `curl` 返回 `200`，但宿主机浏览器仍提示 `ERR_CONNECTION_REFUSED`，通常是浏览器和 dsh 不在同一个容器或 WSL 网络空间，需要使用对应的端口转发方式访问。端口以 `/var/lib/dsh-web/port` 或 `status` 输出为准，不再假设是 8080。
 
-如果日志提示找不到 `node`，重新运行 `install`，脚本会把 `/agent/node/bin` 写入 systemd 的 `PATH`。
+如果日志提示找不到 `dsh` 或 `node`，请检查 PATH，或显式设置 `DSH_BIN`、`NODE_BIN_DIR` 后重新运行 `install`。

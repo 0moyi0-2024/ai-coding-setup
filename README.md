@@ -29,5 +29,5 @@ ai-coding-setup/
 
 ## 快速开始
 
-- **Windows 用户** → 进入 [windows/](windows/README.md)
+- **Windows 用户** → 先从 [GitHub Actions Artifacts](https://github.com/0moyi0-2024/ai-coding-setup/actions) 下载 `DSH-Windows-Installer`，再阅读 [Windows 安装说明](windows/README.md)
 - **Linux / 容器用户** → 进入 [linux_server/](linux_server/README.md)

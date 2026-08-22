@@ -20,6 +20,7 @@ function Protect-DshToken {
     try {
         $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
         $plainBytes = [Text.Encoding]::UTF8.GetBytes($plain)
+        # 这是加密格式的兼容标识，禁止修改，否则已有 Token 无法解密。
         $entropy = [Text.Encoding]::UTF8.GetBytes("DSH-v0.0.1")
         $cipherBytes = [System.Security.Cryptography.ProtectedData]::Protect(
             $plainBytes, $entropy, [System.Security.Cryptography.DataProtectionScope]::CurrentUser
@@ -37,6 +38,7 @@ function Unprotect-DshToken {
     param([Parameter(Mandatory)][string]$CipherB64)
     try {
         $cipherBytes = [Convert]::FromBase64String($CipherB64)
+        # 必须与 Protect-DshToken 保持一致，禁止修改。
         $entropy = [Text.Encoding]::UTF8.GetBytes("DSH-v0.0.1")
         $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
             $cipherBytes, $entropy, [System.Security.Cryptography.DataProtectionScope]::CurrentUser

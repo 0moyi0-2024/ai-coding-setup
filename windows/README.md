@@ -95,7 +95,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 ```bash
 # 方法 1：双击桌面 DSH-Web 快捷方式
 # 方法 2：在 Windows 命令行运行
-wsl -d Ubuntu-24.04 -- bash ~/start-dsh.sh
+wsl -- bash ~/start-dsh.sh
 
 # 然后浏览器访问
 http://localhost:3080
@@ -124,7 +124,7 @@ $WSL_DISTRO = "Ubuntu-22.04"   # 手动指定，跳过自动检测
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `$WSL_DISTRO` | `"auto"` | WSL 发行版（`"auto"`=自动检测） |
-| `$NODE_VERSION` | `"26"` | Node.js 版本 |
+| `$NODE_VERSION` | `"22"` | Node.js 版本 |
 | `$DSH_PORT` | `3080` | DSH Web 端口 |
 | `$DSH_PROFILE` | `"web"` | DSH 启动 profile |
 

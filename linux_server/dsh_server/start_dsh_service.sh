@@ -6,11 +6,17 @@ readonly SCRIPT_NAME=${0##*/}
 readonly UNIT_NAME=dsh-web.service
 readonly UNIT_FILE=/etc/systemd/system/${UNIT_NAME}
 readonly PORT_FILE=/var/lib/dsh-web/port
-readonly DSH_BIN=${DSH_BIN:-/agent/node/bin/dsh}
-readonly DSH_HOME_DIR=${DSH_HOME:-/root/.dsh}
+default_dsh_bin=$(command -v dsh || true)
+default_node_bin=$(command -v node || true)
+default_node_dir=''
+if [[ -n "${default_node_bin}" ]]; then
+  default_node_dir=$(dirname -- "${default_node_bin}")
+fi
+readonly DSH_BIN=${DSH_BIN:-${default_dsh_bin:-/usr/local/bin/dsh}}
+readonly DSH_HOME_DIR=${DSH_HOME:-${HOME:-/root}/.dsh}
 readonly DSH_HOST=${DSH_HOST:-127.0.0.1}
 readonly DSH_WORKDIR=${DSH_WORKDIR:-$(pwd -P)}
-readonly NODE_BIN_DIR=${NODE_BIN_DIR:-/agent/node/bin}
+readonly NODE_BIN_DIR=${NODE_BIN_DIR:-${default_node_dir:-/usr/local/bin}}
 
 usage() {
   printf '%s\n' \
