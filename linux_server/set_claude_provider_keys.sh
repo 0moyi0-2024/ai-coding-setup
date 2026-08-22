@@ -10,6 +10,7 @@ readonly AGENT_CACHE_DIR="${AGENT_DIR}/cache"
 readonly AGENT_CONFIG_DIR="${AGENT_DIR}/config"
 readonly AGENT_HOME="${AGENT_DIR}/home"
 readonly AGENT_ENV_FILE="${AGENT_DIR}/env.sh"
+readonly BASH_RC_FILE="${AI_SETUP_BASHRC_FILE:-${HOME}/.bashrc}"
 readonly CCR_DIR="${AGENT_HOME}/.claude-code-router"
 readonly CCR_SERVICE_FILE="${CCR_DIR}/service.json"
 readonly CLAUDE_CONFIG_DIR="${AGENT_CONFIG_DIR}/claude"
@@ -146,6 +147,65 @@ write_runtime_files() {
   write_executable_file "${AGENT_BIN_DIR}/ccr" "${ccr_launcher}"
 }
 
+configure_bash_startup() {
+  local begin_marker='# BEGIN ai-coding-setup environment'
+  local end_marker='# END ai-coding-setup environment'
+  local source_line rc_directory temporary_file current_mode input_file
+  printf -v source_line '[[ ! -f %q ]] || source %q' \
+    "${AGENT_ENV_FILE}" "${AGENT_ENV_FILE}"
+
+  if ((DRY_RUN)); then
+    log "Would configure ${BASH_RC_FILE} to load ${AGENT_ENV_FILE}"
+    return 0
+  fi
+
+  [[ "${BASH_RC_FILE}" == /* ]] || die "AI_SETUP_BASHRC_FILE must be an absolute path."
+  [[ ! -e "${BASH_RC_FILE}" || -f "${BASH_RC_FILE}" ]] ||
+    die "${BASH_RC_FILE} exists but is not a regular file."
+
+  rc_directory=$(dirname -- "${BASH_RC_FILE}")
+  mkdir -p "${rc_directory}"
+  temporary_file=$(mktemp "${rc_directory}/.$(basename "${BASH_RC_FILE}").tmp.XXXXXXXX")
+  current_mode=600
+  if [[ -f "${BASH_RC_FILE}" ]]; then
+    current_mode=$(stat -c '%a' "${BASH_RC_FILE}")
+    input_file=${BASH_RC_FILE}
+  else
+    input_file=/dev/null
+  fi
+
+  if ! awk -v marker_start="${begin_marker}" -v marker_end="${end_marker}" \
+      -v source_line="${source_line}" '
+        BEGIN { skipping = 0; replaced = 0 }
+        $0 == marker_start {
+          if (!replaced) {
+            print marker_start
+            print source_line
+            print marker_end
+            replaced = 1
+          }
+          skipping = 1
+          next
+        }
+        skipping && $0 == marker_end { skipping = 0; next }
+        !skipping { print }
+        END {
+          if (!replaced) {
+            if (NR > 0) print ""
+            print marker_start
+            print source_line
+            print marker_end
+          }
+        }
+      ' "${input_file}" 2>/dev/null >"${temporary_file}"; then
+    rm -f -- "${temporary_file}"
+    die "Could not update ${BASH_RC_FILE}; check its managed environment block."
+  fi
+  chmod "${current_mode}" "${temporary_file}"
+  mv -f -- "${temporary_file}" "${BASH_RC_FILE}"
+  log "Configured ${BASH_RC_FILE} to load ${AGENT_ENV_FILE} in new Bash sessions"
+}
+
 initialize_install_layout() {
   [[ "${AGENT_DIR}" == /* && "${AGENT_DIR}" != / ]] ||
     die "AI_SETUP_AGENT_DIR must be an absolute path other than /."
@@ -159,6 +219,7 @@ initialize_install_layout() {
     "${AGENT_CONFIG_DIR}" "${AGENT_HOME}" "${CLAUDE_CONFIG_DIR}" \
     "${CODEX_DIR}" "${CODEX_MODEL_CATALOG_DIR}"
   write_runtime_files
+  configure_bash_startup
   export PATH="${AGENT_BIN_DIR}:${NODE_INSTALL_DIR}/bin:${PATH}"
   export NPM_CONFIG_PREFIX="${NODE_INSTALL_DIR}"
   export NPM_CONFIG_CACHE="${AGENT_CACHE_DIR}/npm"
@@ -1161,7 +1222,7 @@ configure_gateways_phase() {
 print_completion_hints() {
   local profile models
   local -a profile_hints=()
-  log "Activate this container's tools in the current shell:"
+  log "New Bash sessions load the environment automatically. Activate it in this current shell:"
   printf '  source %s\n' "${AGENT_ENV_FILE}"
   ((CONFIGURE_GATEWAYS)) || return 0
   for profile in volcano bailian blackai-gpt blackai-claude; do

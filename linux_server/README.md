@@ -85,7 +85,10 @@ catalog 以及模型 metadata 是否能被 Codex 正确加载。它只使用 Cod
 
 ## 安装完成后激活环境
 
-安装成功后，在当前 shell 执行：
+安装脚本会在当前用户的 `~/.bashrc` 中维护一个带标记的配置区块，让以后新打开的
+Bash 会话自动加载 `/agent/env.sh`。重复运行安装脚本不会重复追加配置。
+
+安装脚本无法修改已经启动的 shell 进程，因此安装完成后仍需在当前 shell 执行一次：
 
 ```bash
 source "/agent/env.sh"
@@ -100,11 +103,8 @@ command -v codex
 command -v ccr
 ```
 
-正常情况下，它们都应指向 `/agent/bin/`。每次打开新的 shell，都需要重新执行：
-
-```bash
-source "/agent/env.sh"
-```
+正常情况下，它们都应指向 `/agent/bin/`。以后新打开的 Bash 会话会通过 `~/.bashrc`
+自动加载环境，不需要再次手动执行 `source`。
 
 ## 使用 Claude Code
 
@@ -175,7 +175,8 @@ bash ./set_claude_provider_keys.sh --install-only
 bash ./set_claude_provider_keys.sh --configure-only --dry-run
 ```
 
-重新配置后再次执行：
+重新配置会更新 `/agent/env.sh` 和密钥文件；新开的 Bash 会话会自动读取。当前 shell
+如果需要立即使用新值，再执行：
 
 ```bash
 source "/agent/env.sh"

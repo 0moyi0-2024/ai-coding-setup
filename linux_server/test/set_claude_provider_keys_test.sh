@@ -141,6 +141,7 @@ cleanup() {
 trap cleanup EXIT
 
 export AI_SETUP_AGENT_DIR="${TEST_ROOT}/agent"
+export AI_SETUP_BASHRC_FILE="${TEST_ROOT}/home/.bashrc"
 
 source "${SCRIPT_PATH}"
 
@@ -613,6 +614,31 @@ test_agent_layout() {
   pass "simple container-local agent layout"
 }
 
+test_bash_startup_configuration() {
+  local original_mode loaded_environment
+  mkdir -p "$(dirname -- "${BASH_RC_FILE}")"
+  printf '%s\n' '# existing user configuration' 'export USER_SETTING=keep' >"${BASH_RC_FILE}"
+  chmod 640 "${BASH_RC_FILE}"
+  original_mode=$(stat -c '%a' "${BASH_RC_FILE}")
+
+  configure_bash_startup
+  configure_bash_startup
+
+  assert_eq 1 "$(grep -Fxc '# BEGIN ai-coding-setup environment' "${BASH_RC_FILE}")" \
+    "single managed Bash startup block"
+  assert_eq 1 "$(grep -Fxc "[[ ! -f ${AGENT_ENV_FILE} ]] || source ${AGENT_ENV_FILE}" "${BASH_RC_FILE}")" \
+    "single environment source command"
+  grep -Fq 'export USER_SETTING=keep' "${BASH_RC_FILE}" ||
+    fail "Bash startup preserves existing configuration"
+  assert_eq "${original_mode}" "$(stat -c '%a' "${BASH_RC_FILE}")" \
+    "Bash startup file mode preservation"
+  loaded_environment=$(bash --noprofile --rcfile "${BASH_RC_FILE}" -ic \
+    'printf "%s|%s\n" "$CODEX_HOME" "${PATH%%:*}"' 2>/dev/null)
+  assert_eq "${CODEX_DIR}|${AGENT_BIN_DIR}" "${loaded_environment}" \
+    "new interactive Bash loads the managed environment"
+  pass "idempotent Bash startup configuration"
+}
+
 test_operation_manual() {
   [[ -f "${MANUAL_PATH}" ]] || fail "operation manual"
   assert_file_mode 644 "${MANUAL_PATH}" "operation manual mode"
@@ -848,6 +874,7 @@ test_completion_hint() {
 
 require_command jq
 test_agent_layout
+test_bash_startup_configuration
 test_operation_manual
 test_node_platform
 test_codex_wrapper_preserves_runtime_path
