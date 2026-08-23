@@ -169,7 +169,7 @@ ccr status
 ## 使用 Codex
 
 Codex 会把已配置 token 对应的 provider 注册到全局配置，同时为每个 token 保留独立
-profile。新会话建议带上对应的 `--profile`，以保持模型目录和 token 隔离：
+profile。支持完整 Codex 工具协议的网关可以直接使用对应的 `--profile`：
 
 ```bash
 codex --profile volcano
@@ -178,9 +178,17 @@ codex --profile blackai-gpt
 codex --profile blackai-claude
 ```
 
-没有配置 token 的 profile 不会生成。直接运行不带 profile 的 `codex`，可能看到
-CCR 的默认模型。恢复历史会话时，全局配置可以识别已配置的 provider；如果需要严格
-使用某个 token 的独立模型目录，仍应带上对应的 `--profile`。
+火山网关的原生 Responses 接口不支持 Codex 的 `additional_tools`、`namespace` 等工具项，
+因此不要使用 `codex --profile volcano` 执行需要工具的会话。请通过 CCR 使用火山模型，
+CCR 会负责协议转换：
+
+```bash
+codex -m '火山AI网关/deepseek-v4-pro'
+```
+
+没有配置 token 的 profile 不会生成。需要使用 CCR 转发的火山模型时，请显式指定
+`火山AI网关/deepseek-v4-pro`；恢复历史会话时，全局配置可以识别已配置的 provider；
+如果需要严格使用某个 token 的独立模型目录，仍应带上对应的 `--profile`。
 
 ## 查看脚本发现的模型
 

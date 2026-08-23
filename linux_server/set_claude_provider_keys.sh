@@ -791,6 +791,7 @@ codex_profile() {
       env_key=VOLCANO_AI_GATEWAY_API_KEY
       models=${VOLCANO_MODELS}
       model=$(select_profile_model "${models}" deepseek-v4-flash deepseek-v4-pro)
+      note='# Direct Volcano Responses access does not support Codex tool items; use the default CCR profile for coding/tools.'
       ;;
     bailian)
       provider=bailian; name='Alibaba Bailian'
