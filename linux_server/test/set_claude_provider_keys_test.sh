@@ -614,6 +614,24 @@ test_agent_layout() {
   pass "simple container-local agent layout"
 }
 
+test_setup_user_ownership() {
+  ((EUID == 0)) || return 0
+  id pc >/dev/null 2>&1 || return 0
+  local owned_root="${TEST_ROOT}/owned-agent"
+  local owned_bashrc="${TEST_ROOT}/owned-home/.bashrc"
+  AI_SETUP_USER=pc AI_SETUP_AGENT_DIR="${owned_root}" \
+    AI_SETUP_BASHRC_FILE="${owned_bashrc}" bash -c \
+    'source "$1"; initialize_install_layout; ensure_setup_user_ownership' \
+    bash "${SCRIPT_PATH}" >/dev/null
+  assert_eq pc "$(stat -c '%U' "${owned_root}/config/codex")" \
+    "setup user owns Codex configuration"
+  assert_eq pc "$(stat -c '%U' "${owned_root}/env.sh")" \
+    "setup user owns runtime environment"
+  assert_eq pc "$(stat -c '%U' "${owned_bashrc}")" \
+    "setup user owns Bash startup file"
+  pass "root installation assigns mutable files to setup user"
+}
+
 test_runtime_environment_path_idempotence() {
   local polluted_path expected_path first_load repeated_load
   polluted_path="${AGENT_BIN_DIR}:/usr/bin:${NODE_INSTALL_DIR}/bin:${AGENT_BIN_DIR}:/bin:${NODE_INSTALL_DIR}/bin"
@@ -891,6 +909,7 @@ test_completion_hint() {
 
 require_command jq
 test_agent_layout
+test_setup_user_ownership
 test_runtime_environment_path_idempotence
 test_bash_startup_configuration
 test_operation_manual

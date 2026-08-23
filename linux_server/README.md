@@ -65,6 +65,22 @@ systemd=true
 bash ./set_claude_provider_keys.sh
 ```
 
+脚本应由以后实际使用 `claude`、`codex` 和 `ccr` 的用户执行。如果需要使用 root
+安装（例如 `/agent` 只有 root 可写），请明确指定安装用户；通过 `sudo` 执行时脚本会
+自动使用 `SUDO_USER`：
+
+```bash
+sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh
+```
+
+`AI_SETUP_USER` 会拥有 `/agent/config`、CCR 运行目录、缓存、密钥文件和生成的 Codex
+profile。直接以 root 执行且不设置它时，文件会归 root，普通用户无法读取 `config.toml`；
+这时应重新用上述命令运行，或先执行一次权限修复：
+
+```bash
+sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh --configure-only
+```
+
 脚本会依次询问以下四个可选 API key：
 
 | API key | 用途 |
@@ -220,6 +236,12 @@ hash -r
 ```
 
 然后使用 `command -v codex` 确认路径是否位于 `/agent/bin/`。
+
+### 普通用户提示 `config.toml: Permission denied`
+
+这通常表示之前用 root 安装，导致 Codex 配置和 CCR HOME 仍为 `root:root`。使用实际登录
+用户重新执行一次上面的 `--configure-only` 命令；脚本会保留已保存的 key，并修复配置、
+SQLite 状态和缓存的所有权，不会把 key 打印到终端。
 
 ### 端口已被占用
 

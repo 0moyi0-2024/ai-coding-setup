@@ -10,7 +10,14 @@ readonly AGENT_CACHE_DIR="${AGENT_DIR}/cache"
 readonly AGENT_CONFIG_DIR="${AGENT_DIR}/config"
 readonly AGENT_HOME="${AGENT_DIR}/home"
 readonly AGENT_ENV_FILE="${AGENT_DIR}/env.sh"
-readonly BASH_RC_FILE="${AI_SETUP_BASHRC_FILE:-${HOME}/.bashrc}"
+# When invoked through sudo, keep the generated user files and Bash startup
+# configuration owned by the user who requested the installation.  A direct
+# root invocation can opt into the same behavior with AI_SETUP_USER.
+readonly SETUP_USER="${AI_SETUP_USER:-${SUDO_USER:-${USER:-$(id -un)}}}"
+readonly SETUP_UID="$(id -u "${SETUP_USER}")"
+readonly SETUP_GID="$(id -g "${SETUP_USER}")"
+readonly SETUP_HOME="$(getent passwd "${SETUP_USER}" | cut -d: -f6)"
+readonly BASH_RC_FILE="${AI_SETUP_BASHRC_FILE:-${SETUP_HOME}/.bashrc}"
 readonly CCR_DIR="${AGENT_HOME}/.claude-code-router"
 readonly CCR_SERVICE_FILE="${CCR_DIR}/service.json"
 readonly CLAUDE_CONFIG_DIR="${AGENT_CONFIG_DIR}/claude"
@@ -117,6 +124,29 @@ write_executable_file() {
   run chmod 700 "${file}"
 }
 
+write_public_executable_file() {
+  local file=$1
+  local content=$2
+  write_secure_file "${file}" "${content}" 644
+  run chmod 755 "${file}"
+}
+
+ensure_setup_user_ownership() {
+  ((DRY_RUN)) && return 0
+  ((EUID == 0)) || return 0
+
+  local path
+  # These trees contain the CLI runtime, Codex/Claude state, CCR runtime files,
+  # credentials, SQLite databases, and npm's user cache.  The setup user must
+  # be able to execute and update the tools as well as write their state.
+  for path in "${NODE_INSTALL_DIR}" "${AGENT_CONFIG_DIR}" "${AGENT_HOME}" "${AGENT_CACHE_DIR}"; do
+    [[ -e "${path}" ]] && chown -R -- "${SETUP_UID}:${SETUP_GID}" "${path}"
+  done
+  for path in "${AGENT_ENV_FILE}" "${BASH_RC_FILE}"; do
+    [[ -e "${path}" ]] && chown -- "${SETUP_UID}:${SETUP_GID}" "${path}"
+  done
+}
+
 cleanup_temp_dir() {
   case "${TEMP_DIR}" in
     "${AGENT_DIR}"/.node-download.*|"${AGENT_DIR}"/.codex-catalog.*)
@@ -136,33 +166,35 @@ write_runtime_files() {
   # The format string treats %% as a literal %, so restore the Bash longest-prefix
   # expansion after printf renders the template.
   env_content=${env_content//'${ai_setup_rest%:*}'/'${ai_setup_rest%%:*}'}
-  write_secure_file "${AGENT_ENV_FILE}" "${env_content}"
+  # This file contains paths and exports, but no key values; all users need to
+  # be able to source it when the shared installation is used.
+  write_secure_file "${AGENT_ENV_FILE}" "${env_content}" 644
 
   printf -v claude_launcher \
-    '#!/usr/bin/env bash\nexport PATH=%q:%q:${PATH:-}\nexport CLAUDE_CONFIG_DIR=%q\nexec %q "$@"' \
-    "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" "${CLAUDE_CONFIG_DIR}" \
+    '#!/usr/bin/env bash\n[[ ! -r %q ]] || source %q\nexport CLAUDE_CONFIG_DIR=%q\nexec %q "$@"' \
+    "${AGENT_ENV_FILE}" "${AGENT_ENV_FILE}" "${CLAUDE_CONFIG_DIR}" \
     "${NODE_INSTALL_DIR}/bin/claude"
-  write_executable_file "${AGENT_BIN_DIR}/claude" "${claude_launcher}"
+  write_public_executable_file "${AGENT_BIN_DIR}/claude" "${claude_launcher}"
 
   printf -v codex_launcher \
-    '#!/usr/bin/env bash\nexport PATH=%q:%q:${PATH:-}\nexport CODEX_HOME=%q\n[[ ! -f %q ]] || source %q\nexec %q "$@"' \
-    "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" "${CODEX_DIR}" \
+    '#!/usr/bin/env bash\n[[ ! -r %q ]] || source %q\nexport CODEX_HOME=%q\n[[ ! -r %q ]] || source %q\nexec %q "$@"' \
+    "${AGENT_ENV_FILE}" "${AGENT_ENV_FILE}" "${CODEX_DIR}" \
     "${CODEX_ENV_FILE}" "${CODEX_ENV_FILE}" \
     "${NODE_INSTALL_DIR}/bin/codex"
-  write_executable_file "${AGENT_BIN_DIR}/codex" "${codex_launcher}"
+  write_public_executable_file "${AGENT_BIN_DIR}/codex" "${codex_launcher}"
 
   printf -v ccr_launcher \
-    '#!/usr/bin/env bash\nexport PATH=%q:%q:${PATH:-}\nexport HOME=%q CLAUDE_CONFIG_DIR=%q CODEX_HOME=%q\n[[ ! -f %q ]] || source %q\nexec %q "$@"' \
-    "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" "${AGENT_HOME}" \
+    '#!/usr/bin/env bash\n[[ ! -r %q ]] || source %q\nexport HOME=%q CLAUDE_CONFIG_DIR=%q CODEX_HOME=%q\n[[ ! -r %q ]] || source %q\nexec %q "$@"' \
+    "${AGENT_ENV_FILE}" "${AGENT_ENV_FILE}" "${AGENT_HOME}" \
     "${CLAUDE_CONFIG_DIR}" "${CODEX_DIR}" \
     "${CCR_RUNTIME_FILE}" "${CCR_RUNTIME_FILE}" "${NODE_INSTALL_DIR}/bin/ccr"
-  write_executable_file "${AGENT_BIN_DIR}/ccr" "${ccr_launcher}"
+  write_public_executable_file "${AGENT_BIN_DIR}/ccr" "${ccr_launcher}"
 
   printf -v ccr_autostart_launcher \
     '#!/usr/bin/env bash\nset -Eeuo pipefail\n[[ -f %q ]] || { echo "Missing CCR runtime file: %q" >&2; exit 1; }\nsource %q\nccr_bin=%q\nservice_file=%q\nis_healthy() {\n  local pid\n  pid=$(sed -nE '\''s/.*"pid"[[:space:]]*:[[:space:]]*([0-9]+).*/\\1/p'\'' "${service_file}" 2>/dev/null | head -n 1)\n  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null && curl --fail --silent --max-time 2 "http://${CCR_HOST}:${CCR_MANAGEMENT_PORT}" >/dev/null 2>&1\n}\nif ! is_healthy; then\n  "${ccr_bin}" start --host "${CCR_HOST}" --port "${CCR_MANAGEMENT_PORT}" --no-open --gateway\nfi\nuntil is_healthy; do sleep 1; done\nwhile is_healthy; do sleep 5; done\necho "CCR stopped or became unhealthy" >&2\nexit 1' \
     "${CCR_RUNTIME_FILE}" "${CCR_RUNTIME_FILE}" "${CCR_RUNTIME_FILE}" \
     "${AGENT_BIN_DIR}/ccr" "${CCR_SERVICE_FILE}"
-  write_executable_file "${CCR_AUTOSTART_HELPER}" "${ccr_autostart_launcher}"
+  write_public_executable_file "${CCR_AUTOSTART_HELPER}" "${ccr_autostart_launcher}"
 }
 
 write_ccr_runtime_file() {
@@ -193,8 +225,13 @@ configure_ccr_autostart() {
     return 0
   fi
 
-  unit_user=${SUDO_USER:-${USER:-$(id -un)}}
+  unit_user=${SETUP_USER}
   if ((EUID == 0)); then
+    # The configuration phase may have started CCR as root.  Stop it before
+    # handing the same runtime files to the configured non-root service user.
+    systemctl stop "${CCR_SYSTEMD_UNIT}" >/dev/null 2>&1 || true
+    stop_ccr_service
+    ensure_setup_user_ownership
     unit_file="/etc/systemd/system/${CCR_SYSTEMD_UNIT}"
     write_secure_file "${unit_file}" "[Unit]
 Description=AI Coding Setup Claude Code Router
@@ -224,7 +261,7 @@ WantedBy=multi-user.target" 644
     return 0
   fi
 
-  unit_file="${HOME}/.config/systemd/user/${CCR_SYSTEMD_UNIT}"
+  unit_file="${SETUP_HOME}/.config/systemd/user/${CCR_SYSTEMD_UNIT}"
   write_secure_file "${unit_file}" "[Unit]
 Description=AI Coding Setup Claude Code Router
 After=network-online.target
@@ -324,7 +361,25 @@ initialize_install_layout() {
     "${CODEX_DIR}" "${CODEX_MODEL_CATALOG_DIR}"
   write_runtime_files
   configure_bash_startup
-  export PATH="${AGENT_BIN_DIR}:${NODE_INSTALL_DIR}/bin:${PATH}"
+  # Keep the current shell consistent with the generated, idempotent env file.
+  local ai_setup_entry ai_setup_rest ai_setup_clean=''
+  ai_setup_rest=${PATH:-}
+  while [[ -n "${ai_setup_rest}" ]]; do
+    case "${ai_setup_rest}" in
+      *:*) ai_setup_entry=${ai_setup_rest%%:*}; ai_setup_rest=${ai_setup_rest#*:} ;;
+      *) ai_setup_entry=${ai_setup_rest}; ai_setup_rest='' ;;
+    esac
+    [[ "${ai_setup_entry}" == "${AGENT_BIN_DIR}" ||
+       "${ai_setup_entry}" == "${NODE_INSTALL_DIR}/bin" ||
+       -z "${ai_setup_entry}" ]] && continue
+    case ":${ai_setup_clean}:" in
+      *:"${ai_setup_entry}":*) continue ;;
+    esac
+    [[ -n "${ai_setup_clean}" ]] && ai_setup_clean+=:
+    ai_setup_clean+=${ai_setup_entry}
+  done
+  PATH="${AGENT_BIN_DIR}:${NODE_INSTALL_DIR}/bin${ai_setup_clean:+:${ai_setup_clean}}"
+  export PATH
   export NPM_CONFIG_PREFIX="${NODE_INSTALL_DIR}"
   export NPM_CONFIG_CACHE="${AGENT_CACHE_DIR}/npm"
   export CLAUDE_CONFIG_DIR CODEX_HOME="${CODEX_DIR}"
@@ -1356,6 +1411,9 @@ main() {
   if ((CONFIGURE_GATEWAYS)); then
     configure_gateways_phase
   fi
+
+  # Also repair ownership for --install-only and non-systemd installations.
+  ensure_setup_user_ownership
 
   log 'Setup complete.'
   print_completion_hints
