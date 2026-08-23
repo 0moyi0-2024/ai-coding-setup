@@ -9,6 +9,17 @@
     架构: config.ps1(常量) → dsh-crypto.ps1(加密) → dsh-wsl.ps1(WSL通信) → dsh-service.ps1(服务) → DSH-Tray.ps1(UI)
 #>
 
+# PS2EXE 生成的 EXE 仍需加载安装目录中的模块脚本。只放宽当前进程，
+# 不修改用户或系统的持久执行策略；若组策略强制禁止，则给出明确错误。
+try {
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
+    if ((Get-ExecutionPolicy) -notin @('Bypass', 'Unrestricted')) {
+        throw "当前有效策略仍为 $(Get-ExecutionPolicy)"
+    }
+} catch {
+    throw "DSH-Tray 无法加载依赖脚本。当前 PowerShell 执行策略或组策略禁止脚本加载：$($_.Exception.Message)"
+}
+
 # ===== 加载模块 =====
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing

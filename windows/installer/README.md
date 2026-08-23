@@ -60,6 +60,8 @@
 首次创建新的 WSL 发行版时，安装程序会隐藏提示用户设置并确认 root 密码。密码不会写入脚本、日志或配置文件，
 只通过标准输入设置到 WSL；日常 `dsh` 用户密码保持锁定，DSH 服务不以 root 运行。
 
+安装后的 EXE 会在自身进程内临时使用 `Bypass` 加载随包提供的本地 PowerShell 模块，不会修改 Windows 用户或系统的持久执行策略。若仍提示组策略禁止脚本加载，请检查 `Get-ExecutionPolicy -List` 中的 `MachinePolicy` 和 `UserPolicy`。
+
 ## 构建故障排查
 
 - `[Languages]` 使用 Inno Setup 编译器内置的 `compiler:Default.isl`

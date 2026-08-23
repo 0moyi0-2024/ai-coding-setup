@@ -47,7 +47,7 @@
 # 2. 进入脚本目录
 cd windows\installer
 
-# 3. 首次运行设置执行策略
+# 3. 仅脚本模式首次运行设置执行策略（安装包 EXE 不需要此步骤）
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 # 4. 一键安装全部
@@ -152,7 +152,7 @@ $WSL_DISTRO = "Ubuntu-22.04"   # 手动指定，跳过自动检测
 
 ### Claude 安装命令与网络错误
 
-本项目的 Windows 安装包不会调用 `irm https://claude.ai/install.ps1 | iex`，也不会安装 Claude Code 或 Claude 桌面客户端。配置中的 Claude 选项只用于保存 `ANTHROPIC_API_KEY`。
+本项目的 Windows 安装包不会调用 `irm https://claude.ai/install.ps1 | iex`，也不会安装 Claude Code 或 Claude 桌面客户端。配置中的 Claude 选项只用于保存 `ANTHROPIC_API_KEY`。安装包 EXE 会临时使用当前进程级 `Bypass` 加载随包提供的本地模块，不会修改用户或系统的持久执行策略。
 
 如果你另外安装 Claude Code 时看到“无法连接到远程服务器”，表示当前 Windows 网络无法访问 `claude.ai`，与 DSH 安装包构建、PowerShell 执行策略和管理员权限无关。`claude.ai/install.ps1` 是 Claude Code 的 Windows 安装脚本，不是 Claude 桌面客户端安装包。请只按照 Claude Code 官方文档操作；若要审查远程脚本，应先下载到文件、检查内容，确认来源后再单独执行，不要直接将未知脚本传给 `iex`。
 

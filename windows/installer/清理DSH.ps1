@@ -12,6 +12,17 @@ param(
     [string]$Distro        # 可显式指定要清理的 WSL 发行版
 )
 
+# PS2EXE 生成的 EXE 仍需加载安装目录中的模块脚本。仅放宽当前进程，
+# 不修改用户或系统的持久执行策略。
+try {
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
+    if ((Get-ExecutionPolicy) -notin @('Bypass', 'Unrestricted')) {
+        throw "当前有效策略仍为 $(Get-ExecutionPolicy)"
+    }
+} catch {
+    throw "DSH 清理程序无法加载依赖脚本。当前 PowerShell 执行策略或组策略禁止脚本加载：$($_.Exception.Message)"
+}
+
 $ErrorActionPreference = "Continue"
 # 获取脚本所在目录，兼容 PS2EXE 编译的 exe（$MyInvocation 可能为空）
 $ScriptDir = if ($MyInvocation.MyCommand.Path) {
