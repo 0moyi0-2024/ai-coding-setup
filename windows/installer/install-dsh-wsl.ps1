@@ -156,7 +156,8 @@ function Invoke-WslSilent {
         [string]$Command,
         [int]$TimeoutMs = 600000,  # 默认10分钟超时
         [string]$User = "",
-        [AllowEmptyString()][string]$InputText = ""
+        [AllowEmptyString()][string]$InputText = "",
+        [switch]$ThrowOnError
     )
     process {
         # Base64 编码避免中文乱码（Windows 命令行编码非 UTF-8）
@@ -193,12 +194,62 @@ function Invoke-WslSilent {
             try { $p.Kill() } catch {}
             $out = $outTask.Result
             $err = $errTask.Result
-            return "${out}`n[TIMEOUT after ${TimeoutMs}ms]`n${err}"
+            $result = "${out}`n[TIMEOUT after ${TimeoutMs}ms]`n${err}".Trim()
+            if ($ThrowOnError) {
+                throw "WSL 命令执行超时（${TimeoutMs}ms）：`n$result"
+            }
+            return $result
         }
         $out = $outTask.Result
         $err = $errTask.Result
+        $exitCode = $p.ExitCode
         try { $p.Dispose() } catch {}
-        return "${out}`n${err}"
+        $result = "${out}`n${err}".Trim()
+        if ($ThrowOnError -and $exitCode -ne 0) {
+            throw "WSL 命令执行失败（退出码 $exitCode）：`n$result"
+        }
+        return $result
+    }
+}
+
+function Test-DshNetworkPrerequisites {
+    Write-Host "[2.0] 检查安装所需网络..."
+    $networkCheck = @'
+#!/bin/bash
+set -euo pipefail
+
+failed=0
+check_url() {
+    local name=$1
+    local url=$2
+    if curl --fail --silent --show-error --location --output /dev/null \
+        --connect-timeout 10 --max-time 20 "$url"; then
+        echo "  [OK] $name"
+    else
+        echo "  [FAIL] $name: $url"
+        failed=1
+    fi
+}
+
+check_url "GitHub" "https://github.com"
+check_url "npm registry" "https://registry.npmjs.org/pnpm"
+if ! command -v node >/dev/null 2>&1; then
+    check_url "NodeSource" "https://deb.nodesource.com"
+fi
+
+if ((failed)); then
+    echo "请检查 DNS、代理、防火墙或当前网络是否允许 WSL 访问上述地址。"
+    exit 20
+fi
+'@
+
+    try {
+        $networkResult = $networkCheck | Invoke-WslSilent -ThrowOnError -TimeoutMs 90000
+        $networkResult -split "`n" | Where-Object { $_ } | ForEach-Object { Write-Host $_ }
+        Test-OK "安装所需网络可访问"
+    } catch {
+        Test-FAIL "安装所需网络不可用"
+        throw "DSH 安装需要从 GitHub、npm 和（未安装 Node.js 时）NodeSource 下载文件。$($_.Exception.Message)"
     }
 }
 
@@ -534,7 +585,7 @@ apt install -y -qq curl git wget ca-certificates gnupg unzip 2>&1 | tail -1
 
 echo ">>> 基础环境配置完成"
 '@
-    $setupScript | Invoke-WslSilent -User root
+    $setupScript | Invoke-WslSilent -User root -ThrowOnError
     Test-OK "WSL 基础环境配置完成"
 
     Write-Host ""
@@ -556,6 +607,8 @@ function Start-Part2-DSH {
         throw "WSL 发行版未配置，请先执行 Part 1（不加 -Step 参数）"
     }
 
+    Test-DshNetworkPrerequisites
+
     # 2.1 安装 Node.js
     Write-Host "[2.1] 安装 Node.js v$NODE_VERSION..."
 $nodeInstall = @"
@@ -570,8 +623,8 @@ else
     echo "  Node.js 安装完成: `$(node -v)"
 fi
 "@
-    $nodeInstall | Invoke-WslSilent -User root
-    $nodeVersion = Invoke-WslSilent "node -v"
+    $nodeInstall | Invoke-WslSilent -User root -ThrowOnError
+    $nodeVersion = Invoke-WslSilent "node -v" -ThrowOnError
     Test-OK "Node.js: $nodeVersion"
 
     # 2.2 启用 Corepack（pnpm）
@@ -587,8 +640,8 @@ else
     echo "  pnpm 已启用: `$(pnpm -v)"
 fi
 "@
-    $pnpmInstall | Invoke-WslSilent -User root
-    $pnpmVersion = Invoke-WslSilent "pnpm -v"
+    $pnpmInstall | Invoke-WslSilent -User root -ThrowOnError
+    $pnpmVersion = Invoke-WslSilent "pnpm -v" -ThrowOnError
     Test-OK "pnpm: $pnpmVersion"
 
     # 2.3 检查 git
@@ -601,7 +654,7 @@ if ! command -v git &>/dev/null; then
 fi
 echo "git `$(git --version | awk '{print `$3}')"
 "@
-    $gitVersion = Invoke-WslSilent $gitCheck -User root
+    $gitVersion = Invoke-WslSilent $gitCheck -User root -ThrowOnError
     Test-OK "git: $gitVersion"
 
     # 2.4 克隆 DSH 仓库
@@ -623,8 +676,8 @@ echo "  DSH 仓库: `$DSH_HOME"
 cd "`$DSH_HOME"
 echo "  最新提交: `$(git log -1 --oneline)"
 "@
-    $cloneDSH | Invoke-WslSilent
-    $commitInfo = Invoke-WslSilent "cd $DSH_HOME && git log -1 --oneline"
+    $cloneDSH | Invoke-WslSilent -ThrowOnError
+    $commitInfo = Invoke-WslSilent "cd '$DSH_HOME' && git log -1 --oneline" -ThrowOnError
     Test-OK "DSH 仓库已就绪: $commitInfo"
 
     # 2.5 安装依赖
@@ -637,7 +690,7 @@ cd "$DSH_HOME"
 pnpm install 2>&1 | tail -5
 echo "INSTALL-OK"
 "@
-    $installResult = Invoke-WslSilent $installDeps
+    $installResult = Invoke-WslSilent $installDeps -ThrowOnError
     if ($installResult -match "INSTALL-OK") {
         Test-OK "pnpm install 完成"
     } else {
@@ -655,7 +708,7 @@ cd "$DSH_HOME"
 pnpm run build 2>&1 | tail -10
 echo "BUILD-OK"
 "@
-    $buildResult = Invoke-WslSilent $buildDSH
+    $buildResult = Invoke-WslSilent $buildDSH -ThrowOnError
     if ($buildResult -match "BUILD-OK") {
         Test-OK "pnpm run build 完成"
     } else {
@@ -671,7 +724,7 @@ set -e
 cd "$DSH_HOME"
 pnpm dsh --help 2>&1 | head -5
 "@
-    $dshHelp = Invoke-WslSilent $dshCheck
+    $dshHelp = Invoke-WslSilent $dshCheck -ThrowOnError
     Write-Host "  DSH 帮助输出:"
     $dshHelp -split "`n" | ForEach-Object { Write-Host "    $_" }
     Test-OK "DSH 可执行"

@@ -66,3 +66,4 @@
 - 如果本机没有中文语言包，`build.ps1` 会从 Inno Setup 官方仓库下载临时语言文件；网络不可用时自动回退为英文界面
 - 如果看到 `iscc` 不在 PATH，通常不影响构建；脚本会搜索 Inno Setup 的实际安装目录
 - 如果构建失败，请保留「构建 DSH Windows 安装包」步骤中从第一个 `Error` 开始的完整日志
+- `irm https://claude.ai/install.ps1 | iex` 不属于本项目的构建或安装流程；该命令失败表示 Windows 无法访问 Claude Code 的下载站点，不代表 DSH 安装包构建失败

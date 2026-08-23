@@ -36,7 +36,7 @@
 | **操作系统** | Windows 10 Build 19041+ 或 Windows 11 |
 | **权限** | 管理员权限 |
 | **磁盘空间** | 至少 10GB 可用空间 |
-| **网络** | 需要能访问 GitHub 和 npm 仓库 |
+| **网络** | WSL 需要能访问 GitHub、npm；未安装 Node.js 时还需要访问 NodeSource |
 
 ## 使用方法
 
@@ -149,6 +149,14 @@ $WSL_DISTRO = "Ubuntu-22.04"   # 手动指定，跳过自动检测
 - ⚠️ 首次安装 WSL 需要下载约 500MB，请确保网络畅通
 - ⚠️ 安装过程中会提示输入 DeepSeek API Key，可在 [platform.deepseek.com](https://platform.deepseek.com/api_keys) 获取
 - ⚠️ 如果遇到 WSL 2 内核更新包提示，请访问 [aka.ms/wsl2kernel](https://aka.ms/wsl2kernel) 下载安装
+
+### Claude 安装命令与网络错误
+
+本项目的 Windows 安装包不会调用 `irm https://claude.ai/install.ps1 | iex`，也不会安装 Claude Code 或 Claude 桌面客户端。配置中的 Claude 选项只用于保存 `ANTHROPIC_API_KEY`。
+
+如果你另外安装 Claude Code 时看到“无法连接到远程服务器”，表示当前 Windows 网络无法访问 `claude.ai`，与 DSH 安装包构建、PowerShell 执行策略和管理员权限无关。`claude.ai/install.ps1` 是 Claude Code 的 Windows 安装脚本，不是 Claude 桌面客户端安装包。请只按照 Claude Code 官方文档操作；若要审查远程脚本，应先下载到文件、检查内容，确认来源后再单独执行，不要直接将未知脚本传给 `iex`。
+
+DSH 安装程序会在安装 Node.js 和 DSH 前检查它实际依赖的 GitHub、npm 和 NodeSource。检查失败时会停止并列出不可访问的地址；请先处理 WSL 的 DNS、代理、防火墙或网络访问问题，再重新运行安装。
 
 ## 相关脚本
 
