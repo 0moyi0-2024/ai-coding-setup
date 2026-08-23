@@ -11,7 +11,7 @@
    - 如果自动安装依赖失败，可以手动安装 Inno Setup：https://jrsoftware.org/download.php/is.exe
    - `icon.ico` 已随仓库提供，不需要另行准备
 
-最终安装包会在安装前检查 PowerShell 7。缺失时优先通过 `winget` 安装；如果 `winget` 不可用或失败，则从 Microsoft 官方 PowerShell GitHub Release 下载匹配架构的 MSI，验证 Microsoft 数字签名后静默安装。三个 DSH EXE 会把实际脚本逻辑重新交给 `pwsh.exe` 执行。
+最终安装包会在安装前检查 PowerShell 7。缺失时优先通过 `winget` 安装；如果 `winget` 不可用或失败，则从 Microsoft 官方 PowerShell GitHub Release 下载匹配架构的 MSI，验证 Microsoft 数字签名后静默安装。安装完成后会通过安装目录和 PowerShell Core 注册表重复检测 `pwsh.exe`，确认可用才继续。三个 DSH EXE 会把实际脚本逻辑重新交给 `pwsh.exe` 执行。
 
 ## 编译步骤
 
@@ -73,5 +73,7 @@
 - `[Languages]` 使用 Inno Setup 编译器内置的 `compiler:Default.isl`
 - 如果本机没有中文语言包，`build.ps1` 会从 Inno Setup 官方仓库下载临时语言文件；网络不可用时自动回退为英文界面
 - 如果看到 `iscc` 不在 PATH，通常不影响构建；脚本会搜索 Inno Setup 的实际安装目录
+- PowerShell 7 自动安装失败时，错误窗口会显示具体原因；完整日志保存在 `%ProgramData%\DSH\logs\powershell7-install.log`
+- 安装包使用进程级 `ExecutionPolicy Bypass`，不要求用户永久修改 `CurrentUser` 或系统执行策略
 - 如果构建失败，请保留「构建 DSH Windows 安装包」步骤中从第一个 `Error` 开始的完整日志
 - `irm https://claude.ai/install.ps1 | iex` 不属于本项目的构建或安装流程；该命令失败表示 Windows 无法访问 Claude Code 的下载站点，不代表 DSH 安装包构建失败

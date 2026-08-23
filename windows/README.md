@@ -72,6 +72,8 @@ Artifacts 通常需要登录 GitHub 才能下载。发布正式 Release 时，�
 
 构建过程中产生的三个无版本号 EXE 是完整安装包的内部组件，运行时依赖安装目录中的脚本和模块，不作为独立安装包发布。完整安装包会先检查 PowerShell 7；本机缺失时自动安装并验证，只有 PowerShell 7 就绪后才会继续复制文件和初始化 DSH。
 
+PowerShell 7 自动安装失败时，安装向导会显示具体失败阶段，完整日志保存在 `%ProgramData%\DSH\logs\powershell7-install.log`。安装包已使用当前进程级 `ExecutionPolicy Bypass`，无需为了安装 DSH 永久执行 `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`；由域组策略强制的限制除外。
+
 开发者需要本地构建时，在 PowerShell 7 中运行：
 
 ```powershell

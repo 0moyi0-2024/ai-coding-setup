@@ -106,21 +106,33 @@ var
   ResultCode: Integer;
   BootstrapPath: String;
   PowerShellPath: String;
+  BootstrapLogPath: String;
+  BootstrapLog: AnsiString;
 begin
   Result := '';
   ExtractTemporaryFile('powershell7-bootstrap.ps1');
   BootstrapPath := ExpandConstant('{tmp}\powershell7-bootstrap.ps1');
   PowerShellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  BootstrapLogPath := ExpandConstant('{commonappdata}\DSH\logs\powershell7-install.log');
   if not Exec(PowerShellPath,
-    '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + BootstrapPath + '" -InstallOnly',
+    '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + BootstrapPath +
+      '" -InstallOnly -LogPath "' + BootstrapLogPath + '"',
     '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
   begin
     Result := '无法启动 PowerShell 7 依赖安装程序。';
     exit;
   end;
   if ResultCode <> 0 then
-    Result := 'PowerShell 7 安装或验证失败，退出码: ' + IntToStr(ResultCode) +
-      '。请先从 https://aka.ms/powershell-release?tag=stable 安装后重试。';
+  begin
+    Result := 'PowerShell 7 安装或验证失败，退出码: ' + IntToStr(ResultCode) + '.' + #13#10 +
+      '详细日志: ' + BootstrapLogPath;
+    if LoadStringFromFile(BootstrapLogPath, BootstrapLog) then
+    begin
+      if Length(BootstrapLog) > 1200 then
+        BootstrapLog := Copy(BootstrapLog, Length(BootstrapLog) - 1199, 1200);
+      Result := Result + #13#10 + #13#10 + BootstrapLog;
+    end;
+  end;
 end;
 
 function InitializeSetup: Boolean;
