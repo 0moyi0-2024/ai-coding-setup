@@ -9,16 +9,12 @@
     架构: config.ps1(常量) → dsh-crypto.ps1(加密) → dsh-wsl.ps1(WSL通信) → dsh-service.ps1(服务) → DSH-Tray.ps1(UI)
 #>
 
-# PS2EXE 生成的 EXE 仍需加载安装目录中的模块脚本。只放宽当前进程，
-# 不修改用户或系统的持久执行策略；若组策略强制禁止，则给出明确错误。
+# PS2EXE 生成的 EXE 仍需加载安装目录中的模块脚本。只尝试放宽当前进程，
+# 不修改用户或系统策略。组策略可能覆盖有效策略显示值，因此以实际加载
+# 模块的结果为准，避免把可用的 RemoteSigned 环境误判为失败。
 try {
     Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
-    if ((Get-ExecutionPolicy) -notin @('Bypass', 'Unrestricted')) {
-        throw "当前有效策略仍为 $(Get-ExecutionPolicy)"
-    }
-} catch {
-    throw "DSH-Tray 无法加载依赖脚本。当前 PowerShell 执行策略或组策略禁止脚本加载：$($_.Exception.Message)"
-}
+} catch {}
 
 # ===== 加载模块 =====
 Add-Type -AssemblyName System.Windows.Forms
@@ -33,18 +29,61 @@ $modDir = if ($PSScriptRoot) {
 } else {
     Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 }
-. (Join-Path $modDir "powershell7-bootstrap.ps1")
-$restartScript = Join-Path $modDir "source\DSH-Tray.ps1"
-if (-not (Test-Path -LiteralPath $restartScript -PathType Leaf) -and $PSCommandPath -and [IO.Path]::GetExtension($PSCommandPath) -ieq '.ps1') {
-    $restartScript = $PSCommandPath
+
+$trayLogRoot = Join-Path ([Environment]::GetFolderPath("ApplicationData")) "DSH\logs"
+$script:TrayLogFile = Join-Path $trayLogRoot "tray.log"
+New-Item -ItemType Directory -Path $trayLogRoot -Force -ErrorAction SilentlyContinue | Out-Null
+
+function Write-TrayLog {
+    param([string]$Message, [string]$Level = "INFO")
+    $line = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"), $Level, $Message
+    try { Add-Content -LiteralPath $script:TrayLogFile -Value $line -Encoding UTF8 } catch {}
 }
-if (Restart-DshScriptInPowerShell7 -ScriptPath $restartScript -Hidden) {
-    exit 0
+
+function Show-TrayError {
+    param([string]$ActionName, [string]$Message)
+    Write-TrayLog "$ActionName 失败: $Message" "ERROR"
+    $detail = "$Message`n`n详细日志：$script:TrayLogFile"
+    if ($script:notifyIcon) {
+        try { $script:notifyIcon.ShowBalloonTip(4000, "$ActionName 失败", $Message, [System.Windows.Forms.ToolTipIcon]::Error) } catch {}
+    }
+    [System.Windows.Forms.MessageBox]::Show(
+        $detail,
+        "DSH - $ActionName 失败",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    ) | Out-Null
 }
-. (Join-Path $modDir "config.ps1")
-. (Join-Path $modDir "dsh-crypto.ps1")
-. (Join-Path $modDir "dsh-wsl.ps1")
-. (Join-Path $modDir "dsh-service.ps1")
+
+function Invoke-TrayAction {
+    param([string]$ActionName, [scriptblock]$Action)
+    Write-TrayLog "开始: $ActionName"
+    try {
+        & $Action
+        Write-TrayLog "完成: $ActionName"
+    } catch {
+        Show-TrayError $ActionName $_.Exception.Message
+    }
+}
+
+try {
+    Write-TrayLog "托盘进程启动，模块目录: $modDir"
+    . (Join-Path $modDir "powershell7-bootstrap.ps1")
+    $restartScript = Join-Path $modDir "source\DSH-Tray.ps1"
+    if (-not (Test-Path -LiteralPath $restartScript -PathType Leaf) -and $PSCommandPath -and [IO.Path]::GetExtension($PSCommandPath) -ieq '.ps1') {
+        $restartScript = $PSCommandPath
+    }
+    if (Restart-DshScriptInPowerShell7 -ScriptPath $restartScript -Hidden) {
+        exit 0
+    }
+    . (Join-Path $modDir "config.ps1")
+    . (Join-Path $modDir "dsh-crypto.ps1")
+    . (Join-Path $modDir "dsh-wsl.ps1")
+    . (Join-Path $modDir "dsh-service.ps1")
+} catch {
+    Show-TrayError "初始化" $_.Exception.Message
+    exit 1
+}
 
 # ===== 托盘图标 =====
 $ICON_FILE = Join-Path $modDir "icon.ico"
@@ -59,6 +98,7 @@ $script:notifyIcon = $null
 $script:contextMenu = $null
 $script:terminalProcess = $null
 $script:lastBrowserState = $false
+$script:wslReady = $false
 
 # ===== Token 配置（UI 层）=====
 function Get-TokenStatus {
@@ -144,10 +184,9 @@ function Start-DSH {
     } catch {
         $msg = $_.Exception.Message
         if ($msg -match "NoToken") {
-            $script:notifyIcon.ShowBalloonTip(4000, "DSH", "请先配置至少一个 API Key（右键 → Token 配置）", [System.Windows.Forms.ToolTipIcon]::Warning)
-        } else {
-            $script:notifyIcon.ShowBalloonTip(3000, "DSH 启动失败", $msg, [System.Windows.Forms.ToolTipIcon]::Error)
+            throw "请先配置至少一个 API Key（右键 → Token 配置）。"
         }
+        throw
     }
 }
 
@@ -178,11 +217,34 @@ function Show-Terminal {
         $script:notifyIcon.ShowBalloonTip(1000, "DSH", "终端窗口已打开", [System.Windows.Forms.ToolTipIcon]::Info)
         return
     }
-    Invoke-WslHidden "touch $global:DSH_LOG_FILE 2>/dev/null" 5000 | Out-Null
+    Assert-DshWslReady | Out-Null
+    Invoke-WslHidden "touch $global:DSH_LOG_FILE 2>/dev/null" 5000 -ThrowOnError | Out-Null
     $tailCmd = "echo -ne '\033]0;🐋 DSH 实时日志 v$global:DSH_VERSION\007'; echo '=== 🐋 DSH 实时日志 v$global:DSH_VERSION (Ctrl+C 关闭) ==='; echo ''; tail -f $global:DSH_LOG_FILE"
     $script:terminalProcess = Invoke-WslVisible $tailCmd
     $script:notifyIcon.ShowBalloonTip(2000, "DSH 终端", "日志窗口已打开", [System.Windows.Forms.ToolTipIcon]::Info)
     Update-Menu
+}
+
+function Repair-DshInstallation {
+    $installer = Join-Path $modDir "DSH-一键安装.exe"
+    if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+        throw "找不到安装入口 $installer。请重新下载安装完整的 DSH 安装包。"
+    }
+    Start-Process -FilePath $installer | Out-Null
+}
+
+function Update-DshReadiness {
+    try {
+        Assert-DshWslReady | Out-Null
+        $script:wslReady = $true
+        $script:IsRunning = Test-DshRunning
+        return $true
+    } catch {
+        $script:wslReady = $false
+        $script:IsRunning = $false
+        Write-TrayLog "WSL 与 DSH 尚未就绪: $($_.Exception.Message)" "WARN"
+        return $false
+    }
 }
 
 function Hide-Terminal {
@@ -207,7 +269,13 @@ function Update-Menu {
 
     # 状态行
     $statusItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $statusItem.Text = if ($script:IsRunning) { "🐋 DSH 运行中 (端口 $global:DSH_PORT)" } else { "⏹ DSH 已停止" }
+    $statusItem.Text = if (-not $script:wslReady) {
+        "⚠ WSL / DSH 尚未就绪"
+    } elseif ($script:IsRunning) {
+        "🐋 DSH 运行中 (端口 $global:DSH_PORT)"
+    } else {
+        "⏹ DSH 已停止"
+    }
     $statusItem.Enabled = $false
     $script:contextMenu.Items.Add($statusItem)
     $script:contextMenu.Items.Add("-")
@@ -216,25 +284,26 @@ function Update-Menu {
     if ($script:IsRunning) {
         $item = New-Object System.Windows.Forms.ToolStripMenuItem
         $item.Text = "⏹ 停止 DSH"
-        $item.Add_Click({ Stop-DSH })
+        $item.Add_Click({ Invoke-TrayAction "停止 DSH" { Stop-DSH } })
         $script:contextMenu.Items.Add($item)
     } else {
         $item = New-Object System.Windows.Forms.ToolStripMenuItem
         $item.Text = "▶ 启动 DSH"
-        $item.Add_Click({ Start-DSH })
+        $item.Add_Click({ Invoke-TrayAction "启动 DSH" { Start-DSH } })
         $script:contextMenu.Items.Add($item)
     }
 
     # 浏览器
-    if (Test-DshBrowserOpen) {
+    $browserOpen = $script:wslReady -and (Test-DshBrowserOpen)
+    if ($browserOpen) {
         $item = New-Object System.Windows.Forms.ToolStripMenuItem
         $item.Text = "🌐 关闭 Web 界面"
-        $item.Add_Click({ Close-Web })
+        $item.Add_Click({ Invoke-TrayAction "关闭 Web 界面" { Close-Web } })
         $script:contextMenu.Items.Add($item)
     } else {
         $item = New-Object System.Windows.Forms.ToolStripMenuItem
         $item.Text = "🌐 打开 Web 界面"
-        $item.Add_Click({ Open-Web })
+        $item.Add_Click({ Invoke-TrayAction "打开 Web 界面" { Open-Web } })
         $script:contextMenu.Items.Add($item)
     }
 
@@ -242,12 +311,12 @@ function Update-Menu {
     if ($script:terminalProcess -and -not $script:terminalProcess.HasExited) {
         $item = New-Object System.Windows.Forms.ToolStripMenuItem
         $item.Text = "📺 隐藏终端"
-        $item.Add_Click({ Hide-Terminal })
+        $item.Add_Click({ Invoke-TrayAction "隐藏终端" { Hide-Terminal } })
         $script:contextMenu.Items.Add($item)
     } else {
         $item = New-Object System.Windows.Forms.ToolStripMenuItem
         $item.Text = "📺 显示终端（日志）"
-        $item.Add_Click({ Show-Terminal })
+        $item.Add_Click({ Invoke-TrayAction "显示终端" { Show-Terminal } })
         $script:contextMenu.Items.Add($item)
     }
     $script:contextMenu.Items.Add("-")
@@ -258,7 +327,7 @@ function Update-Menu {
 
     $viewToken = New-Object System.Windows.Forms.ToolStripMenuItem
     $viewToken.Text = "📋 查看配置状态"
-    $viewToken.Add_Click({ Show-TokenStatus })
+    $viewToken.Add_Click({ Invoke-TrayAction "查看 Token 状态" { Show-TokenStatus } })
     $tokenMenu.DropDownItems.Add($viewToken)
     $tokenMenu.DropDownItems.Add("-")
 
@@ -270,8 +339,10 @@ function Update-Menu {
         $item.Text = "$indicator $($provider.Name) - $($provider.Desc)"
         $pName = $provider.Name; $pKey = $provider.EnvKey; $pDesc = $provider.Desc
         $item.Add_Click({
-            Set-Token -ProviderName $pName -EnvKey $pKey -Description $pDesc
-            Update-Menu
+            Invoke-TrayAction "配置 $pName Token" {
+                Set-Token -ProviderName $pName -EnvKey $pKey -Description $pDesc
+                Update-Menu
+            }
         }.GetNewClosure())
         $tokenMenu.DropDownItems.Add($item)
     }
@@ -290,6 +361,14 @@ function Update-Menu {
     $tokenMenu.DropDownItems.Add($clearItem)
     $script:contextMenu.Items.Add($tokenMenu)
     $script:contextMenu.Items.Add("-")
+
+    if (-not $script:wslReady) {
+        $repairItem = New-Object System.Windows.Forms.ToolStripMenuItem
+        $repairItem.Text = "🔧 继续安装 / 修复 DSH"
+        $repairItem.Add_Click({ Invoke-TrayAction "继续安装 / 修复 DSH" { Repair-DshInstallation } })
+        $script:contextMenu.Items.Add($repairItem)
+        $script:contextMenu.Items.Add("-")
+    }
 
     # 退出
     $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem
@@ -312,12 +391,25 @@ function Show-Tray {
     $script:notifyIcon.Visible = $true
 
     $script:contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
+    if (Update-DshReadiness) {
+        Remove-DshEnvFile
+        Write-TrayLog "WSL 与 DSH 安装检查通过，发行版: $global:WSL_DISTRO"
+    }
     Update-Menu
     $script:notifyIcon.ContextMenuStrip = $script:contextMenu
-    $script:contextMenu.Add_Opening({ Update-Menu })
+    $script:contextMenu.Add_Opening({
+        try {
+            Update-DshReadiness | Out-Null
+            Update-Menu
+        } catch {
+            Show-TrayError "刷新右键菜单" $_.Exception.Message
+        }
+    })
 
     $script:notifyIcon.Add_DoubleClick({
-        if (Test-DshBrowserOpen) { Close-Web } else { Open-Web }
+        Invoke-TrayAction "打开 / 关闭 Web 界面" {
+            if ($script:wslReady -and (Test-DshBrowserOpen)) { Close-Web } else { Open-Web }
+        }
     })
 
     $script:notifyIcon.Add_Click({
@@ -333,11 +425,12 @@ function Show-Tray {
     # 定时检测浏览器状态
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 3000
-    $timer.Add_Tick({ Test-BrowserStateChanged })
+    $timer.Add_Tick({
+        if ($script:wslReady) {
+            try { Test-BrowserStateChanged } catch { Write-TrayLog "状态检测失败: $($_.Exception.Message)" "WARN" }
+        }
+    })
     $timer.Start()
-
-    # 清理上次异常退出残留的 .env
-    Remove-DshEnvFile
 
     [System.Windows.Forms.Application]::Run()
 }
@@ -345,6 +438,8 @@ function Show-Tray {
 # ===== 启动 =====
 try {
     Show-Tray
+} catch {
+    Show-TrayError "托盘运行" $_.Exception.Message
 } finally {
     try { Remove-DshEnvFile } catch {}
     if ($script:IsRunning) {

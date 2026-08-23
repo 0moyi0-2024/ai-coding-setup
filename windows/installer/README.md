@@ -64,7 +64,9 @@
 首次创建新的 WSL 发行版时，安装程序会隐藏提示用户设置并确认 root 密码。密码不会写入脚本、日志或配置文件，
 只通过标准输入设置到 WSL；日常 `dsh` 用户密码保持锁定，DSH 服务不以 root 运行。
 
-安装后的 EXE 会在自身进程内临时使用 `Bypass` 加载随包提供的本地 PowerShell 模块，不会修改 Windows 用户或系统的持久执行策略。若仍提示组策略禁止脚本加载，请检查 `Get-ExecutionPolicy -List` 中的 `MachinePolicy` 和 `UserPolicy`。
+安装后的 EXE 会尝试在自身进程内临时使用 `Bypass` 加载随包提供的本地 PowerShell 模块，不会修改 Windows 用户或系统的持久执行策略，也不要求把 `CurrentUser` 改成 `Bypass`。如果域策略覆盖进程设置，程序会继续按实际模块加载结果判断，`RemoteSigned` 不会被误判为失败；只有模块确实被 `AllSigned` 等组织策略阻止时才会报错。
+
+托盘管理器启动时会验证 WSL、安装时记录的发行版及 DSH 目录。右键操作失败时会显示错误对话框，详细记录保存在 `%APPDATA%\DSH\logs\tray.log`；若安装尚未完成，右键菜单会提供“继续安装 / 修复 DSH”。
 
 安装包内的 `.ps1` 文件统一使用 UTF-8 with BOM，以兼容 PS2EXE 可能使用的 Windows PowerShell 5.1 运行环境。`build.ps1` 会在编译前检查编码；任何脚本缺少 BOM 时将停止构建，避免发布中文乱码的安装包。
 
@@ -77,6 +79,8 @@
 - PowerShell 7 的 Windows 侧下载会自动使用 `HTTPS_PROXY`、`HTTP_PROXY` 或 Windows 当前用户的系统代理；不会把 Windows 的 `127.0.0.1` 代理错误写入 WSL
 - 缺少 PowerShell 7 且当前进程不是管理员时，引导脚本会通过 UAC 自行提权；取消或禁止 UAC 会停止后续安装
 - WSL 可选功能缺失时会自动启用；返回 `3010` 或 `EnablePending` 时暂停安装并要求重启，避免在重启前继续执行
-- 安装包使用进程级 `ExecutionPolicy Bypass`，不要求用户永久修改 `CurrentUser` 或系统执行策略
+- 旧版系统内置 WSL 可能不支持 `wsl --version`；安装脚本以 Windows 可选功能状态判断是否就绪，不会因此反复误报未安装
+- 安装包尝试使用进程级 `ExecutionPolicy Bypass`，不要求用户永久修改 `CurrentUser` 或系统执行策略
+- 托盘右键功能失败时查看 `%APPDATA%\DSH\logs\tray.log`；安装 WSL/Ubuntu 的命令输出保存在安装目录下的 `dsh-install-*.log`
 - 如果构建失败，请保留「构建 DSH Windows 安装包」步骤中从第一个 `Error` 开始的完整日志
 - `irm https://claude.ai/install.ps1 | iex` 不属于本项目的构建或安装流程；该命令失败表示 Windows 无法访问 Claude Code 的下载站点，不代表 DSH 安装包构建失败

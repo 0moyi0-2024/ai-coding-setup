@@ -72,13 +72,15 @@ Artifacts 通常需要登录 GitHub 才能下载。发布正式 Release 时，�
 
 构建过程中产生的三个无版本号 EXE 是完整安装包的内部组件，运行时依赖安装目录中的脚本和模块，不作为独立安装包发布。完整安装包会先检查 PowerShell 7；本机缺失时自动安装并验证，只有 PowerShell 7 就绪后才会继续复制文件和初始化 DSH。
 
-PowerShell 7 自动安装失败时，安装向导会显示具体失败阶段，完整日志保存在 `%ProgramData%\DSH\logs\powershell7-install.log`。安装包已使用当前进程级 `ExecutionPolicy Bypass`，无需为了安装 DSH 永久执行 `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`；由域组策略强制的限制除外。
+PowerShell 7 自动安装失败时，安装向导会显示具体失败阶段，完整日志保存在 `%ProgramData%\DSH\logs\powershell7-install.log`。安装包会尝试使用当前进程级 `ExecutionPolicy Bypass`，无需为了安装 DSH 永久执行 `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`，更不需要把当前用户永久设为 `Bypass`；如果域策略覆盖进程设置，则按本地模块实际能否加载判断。
 
 PowerShell 7 引导器会自动读取 `HTTPS_PROXY`、`HTTP_PROXY` 或 Windows 当前用户的系统代理设置，并将代理传给 Windows 侧的 `winget` 和 PowerShell 下载请求。Clash、Mihomo 等代理软件只需开启“系统代理”，无需把本机端口写入项目配置。此设置不会把 Windows 的 `127.0.0.1` 代理写入 WSL；WSL 内的 GitHub、npm 和 NodeSource 连通性由安装脚本另行预检。
 
 完整安装包会在开始时请求管理员权限。如果 PowerShell 7 引导脚本被非管理员进程直接调用且确实需要安装，脚本也会通过 Windows UAC 自行重新启动为管理员；用户取消 UAC 或组织策略禁止提权时会停止安装并记录原因。
 
-WSL 未安装时，安装脚本会在管理员权限下检查并启用 `VirtualMachinePlatform` 和 `Microsoft-Windows-Subsystem-Linux`，不要求用户预先手动执行 `wsl --install`。如果 Windows 返回 `3010` 或功能状态为 `EnablePending`，脚本会暂停后续 DSH 步骤并提示重启；重启后重新运行完整安装包即可继续。
+WSL 未安装时，安装脚本会在管理员权限下检查并启用 `VirtualMachinePlatform` 和 `Microsoft-Windows-Subsystem-Linux`，不要求用户预先手动执行 `wsl --install`。旧版系统内置 WSL 不支持 `wsl --version` 时仍可正常识别；只有 Windows 返回 `3010` 或功能状态为 `EnablePending` 才会暂停并提示重启。Ubuntu 安装失败时会保留实际退出码和 WSL 输出，不会笼统归因于网络。
+
+托盘管理器会检查安装时记录的 WSL 发行版和 `/home/dsh/dsh` 目录。右键操作失败时会弹出具体错误，并记录到 `%APPDATA%\DSH\logs\tray.log`；如果 WSL 或 DSH 尚未安装完整，菜单会显示“继续安装 / 修复 DSH”。
 
 开发者需要本地构建时，在 PowerShell 7 中运行：
 

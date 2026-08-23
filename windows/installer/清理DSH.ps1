@@ -10,15 +10,12 @@ param(
     [string]$Distro        # 可显式指定要清理的 WSL 发行版
 )
 
-# PS2EXE 生成的 EXE 仍需加载安装目录中的模块脚本。仅放宽当前进程，
-# 不修改用户或系统的持久执行策略。
+# 仅尝试放宽当前进程，不修改用户或系统的持久执行策略。组策略可能覆盖
+# 有效策略显示值，因此不预先拒绝 RemoteSigned，而以脚本实际执行结果为准。
 try {
     Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
-    if ((Get-ExecutionPolicy) -notin @('Bypass', 'Unrestricted')) {
-        throw "当前有效策略仍为 $(Get-ExecutionPolicy)"
-    }
 } catch {
-    throw "DSH 清理程序无法加载依赖脚本。当前 PowerShell 执行策略或组策略禁止脚本加载：$($_.Exception.Message)"
+    Write-Warning "无法设置进程级执行策略，将继续尝试执行本地清理脚本: $($_.Exception.Message)"
 }
 
 $ErrorActionPreference = "Continue"

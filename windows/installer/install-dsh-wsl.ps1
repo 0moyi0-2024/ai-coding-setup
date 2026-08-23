@@ -28,15 +28,13 @@ param(
     [string]$Step = "all"
 )
 
-# PS2EXE 生成的 EXE 仍需加载安装目录中的 config.ps1。仅放宽当前进程，
-# 不修改用户或系统的持久执行策略。
+# PS2EXE 生成的 EXE 仍需加载安装目录中的模块。尝试放宽当前进程，
+# 但不要求最终有效策略必须显示为 Bypass：MachinePolicy/UserPolicy 可能
+# 覆盖该显示值，RemoteSigned 下本地安装文件仍然可以正常加载。
 try {
     Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
-    if ((Get-ExecutionPolicy) -notin @('Bypass', 'Unrestricted')) {
-        throw "当前有效策略仍为 $(Get-ExecutionPolicy)"
-    }
 } catch {
-    throw "DSH 安装程序无法加载依赖脚本。当前 PowerShell 执行策略或组策略禁止脚本加载：$($_.Exception.Message)"
+    Write-Warning "无法设置进程级执行策略，将直接尝试加载本地模块: $($_.Exception.Message)"
 }
 
 $ErrorActionPreference = "Stop"
@@ -279,6 +277,30 @@ function Invoke-WslSilent {
     }
 }
 
+function Invoke-WslHostLogged {
+    param(
+        [Parameter(Mandatory=$true)][string]$Description,
+        [Parameter(Mandatory=$true)][string[]]$Arguments
+    )
+
+    Write-Host "  $Description"
+    $output = ""
+    $exitCode = -1
+    try {
+        $output = (& wsl.exe @Arguments 2>&1 | Out-String).Trim()
+        $exitCode = $LASTEXITCODE
+    } catch {
+        $output = $_.Exception.Message
+    }
+    Add-Content -Path $LogFile -Value "[WSL] wsl.exe $($Arguments -join ' ')"
+    Add-Content -Path $LogFile -Value "[WSL] exit code: $exitCode"
+    if ($output) {
+        Add-Content -Path $LogFile -Value $output
+        $output -split "`r?`n" | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+    }
+    return [pscustomobject]@{ ExitCode = $exitCode; Output = $output }
+}
+
 function Test-DshNetworkPrerequisites {
     Write-Host "[2.0] 检查安装所需网络..."
     $networkCheck = @'
@@ -347,41 +369,45 @@ function Start-Part1-WSL {
     $WSL_DISTRO = $script:WSL_DISTRO
     Test-OK "WSL 发行版已确定: $script:WSL_DISTRO"
 
-    # 1.3 同时检查 WSL 命令和两个 Windows 可选功能。仅有 wsl.exe
-    # 不代表虚拟机平台和 WSL 功能已经启用。
+    # 1.3 功能状态决定 WSL 是否已启用。旧版 inbox WSL 不支持
+    # `wsl --version`，因此该命令只用于显示版本，不能作为就绪硬条件。
     Write-Host "[1.3] 检查 WSL 状态..."
-    $wslCommandReady = $false
-    try {
-        wsl --version 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            $wslCommandReady = $true
-        }
-    } catch {}
+    $wslCommand = Get-Command "wsl.exe" -ErrorAction SilentlyContinue
+    $wslCommandPresent = $null -ne $wslCommand
+    $wslVersionText = "当前版本不支持 wsl --version（兼容模式）"
+    if ($wslCommandPresent) {
+        try {
+            $versionOutput = (& wsl.exe --version 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0 -and $versionOutput) { $wslVersionText = ($versionOutput -split "`r?`n")[0] }
+        } catch {}
+    }
 
     $virtualMachinePlatformState = (Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction Stop).State
     $wslFeatureState = (Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction Stop).State
-    Write-Host "  wsl.exe: $(if ($wslCommandReady) { '可用' } else { '不可用' })"
+    Write-Host "  wsl.exe: $(if ($wslCommandPresent) { '已找到' } else { '未找到' })"
+    if ($wslCommandPresent) { Write-Host "  WSL 版本检测: $wslVersionText" }
     Write-Host "  VirtualMachinePlatform: $virtualMachinePlatformState"
     Write-Host "  Microsoft-Windows-Subsystem-Linux: $wslFeatureState"
-    $wslReady = $wslCommandReady -and
-        $virtualMachinePlatformState -eq 'Enabled' -and
+    $wslFeaturesReady = $virtualMachinePlatformState -eq 'Enabled' -and
         $wslFeatureState -eq 'Enabled'
 
-    if (-not $wslReady) {
+    if (-not $wslFeaturesReady) {
         # 1.4 启用 WSL 功能
         Write-Host "[1.4] 启用 WSL 功能..."
         Write-Host "  正在启用 VirtualMachinePlatform 和 WSL..."
         $dismOk = $true
         $restartRequired = $false
-        dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart 2>&1 | Out-Null
+        $virtualMachinePlatformOutput = (dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart 2>&1 | Out-String)
         $virtualMachinePlatformExitCode = $LASTEXITCODE
+        Add-Content -Path $LogFile -Value "[DISM VirtualMachinePlatform] exit code: $virtualMachinePlatformExitCode`n$virtualMachinePlatformOutput"
         if ($virtualMachinePlatformExitCode -notin @(0, 3010)) {
             Write-Host "  ❌ VirtualMachinePlatform 启用失败 (exit: $virtualMachinePlatformExitCode)" -ForegroundColor Red
             $dismOk = $false
         }
         if ($virtualMachinePlatformExitCode -eq 3010) { $restartRequired = $true }
-        dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart 2>&1 | Out-Null
+        $wslFeatureOutput = (dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart 2>&1 | Out-String)
         $wslFeatureExitCode = $LASTEXITCODE
+        Add-Content -Path $LogFile -Value "[DISM Microsoft-Windows-Subsystem-Linux] exit code: $wslFeatureExitCode`n$wslFeatureOutput"
         if ($wslFeatureExitCode -notin @(0, 3010)) {
             Write-Host "  ❌ WSL 功能启用失败 (exit: $wslFeatureExitCode)" -ForegroundColor Red
             $dismOk = $false
@@ -395,21 +421,33 @@ function Start-Part1-WSL {
         if ($virtualMachinePlatformState -eq 'EnablePending' -or $wslFeatureState -eq 'EnablePending') {
             $restartRequired = $true
         }
-        Write-Host "  WSL 功能已启用或等待重启后生效" -ForegroundColor Green
+        $wslFeaturesReady = $virtualMachinePlatformState -eq 'Enabled' -and $wslFeatureState -eq 'Enabled'
 
-        Write-Host ""
-        Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Yellow
-        Write-Host "  ║  ⚠️  需要重启电脑，WSL 才能使用         ║" -ForegroundColor Yellow
-        Write-Host "  ║                                            ║" -ForegroundColor Yellow
-        Write-Host "  ║  重启后重新运行此脚本即可从断点继续      ║" -ForegroundColor Yellow
-        Write-Host "  ║  .\install-dsh-wsl.ps1                   ║" -ForegroundColor Yellow
-        Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Yellow
-        Write-Host ""
-        $restartNow = Read-Host "  是否现在重启？(Y/n)"
-        if ($restartNow -ne "n" -and $restartNow -ne "N") {
-            Restart-Computer -Force
+        if (-not $restartRequired -and -not $wslFeaturesReady) {
+            throw "WSL 功能启用命令已完成，但系统功能状态仍未变为 Enabled。详细信息见 $LogFile"
         }
-        exit 0
+        if (-not $restartRequired) {
+            Write-Host "  WSL 功能已启用，无需重启" -ForegroundColor Green
+        }
+
+        if ($restartRequired) {
+            Write-Host ""
+            Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Yellow
+            Write-Host "  ║  ⚠️  需要重启电脑，WSL 才能使用         ║" -ForegroundColor Yellow
+            Write-Host "  ║                                            ║" -ForegroundColor Yellow
+            Write-Host "  ║  重启后重新运行「一键安装 DSH」继续       ║" -ForegroundColor Yellow
+            Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Yellow
+            Write-Host ""
+            $restartNow = Read-Host "  是否现在重启？(Y/n)"
+            if ($restartNow -ne "n" -and $restartNow -ne "N") {
+                Restart-Computer -Force
+            }
+            exit 0
+        }
+    }
+
+    if (-not $wslCommandPresent) {
+        throw "Windows 功能已启用，但找不到 wsl.exe。请安装最新 Windows 更新后重试。详细日志: $LogFile"
     }
 
     # 1.5 设置 WSL 2 为默认版本
@@ -505,12 +543,12 @@ function Start-Part1-WSL {
             # 2) 安装全新系统
             Write-Host "    2/4 安装全新 $targetName..."
             $installOk = $false
-            wsl --install -d $targetName --no-launch 2>&1
-            if ($LASTEXITCODE -eq 0) { $installOk = $true }
+            $installResult = Invoke-WslHostLogged -Description "使用 --no-launch 安装 $targetName..." -Arguments @('--install', '-d', $targetName, '--no-launch')
+            if ($installResult.ExitCode -eq 0) { $installOk = $true }
             if (-not $installOk) {
                 Write-Host "    --no-launch 不支持，改用标准安装..." -ForegroundColor Yellow
-                wsl --install -d $targetName 2>&1
-                if ($LASTEXITCODE -eq 0) { $installOk = $true }
+                $installResult = Invoke-WslHostLogged -Description "使用标准命令安装 $targetName..." -Arguments @('--install', '-d', $targetName)
+                if ($installResult.ExitCode -eq 0) { $installOk = $true }
             }
             if (-not $installOk) {
                 # 安装失败，恢复原系统
@@ -518,7 +556,7 @@ function Start-Part1-WSL {
                 wsl --import $targetName "C:\WSL\$targetName" $backupTar 2>&1 | Out-Null
                 wsl --unregister $backupName 2>&1 | Out-Null
                 Remove-Item $backupTar, $newTar -Force -ErrorAction SilentlyContinue
-                throw "安装 $targetName 失败，原系统已恢复"
+                throw "安装 $targetName 失败（退出码 $($installResult.ExitCode)），原系统已恢复。WSL 输出: $($installResult.Output)。详细日志: $LogFile"
             }
 
             # 3) 导出新系统 → 导入为目标名称 → 卸载新系统原名
@@ -555,11 +593,13 @@ function Start-Part1-WSL {
             # 系统上没有任何 Ubuntu → 直接安装标准名称，无需改名
             $dshName = $targetName
             Write-Host "  正在下载 Ubuntu-${ubuntuVer}（约 500MB，首次需几分钟）..."
-            wsl --install -d $targetName --no-launch 2>&1
-            if ($LASTEXITCODE -ne 0) {
+            $installResult = Invoke-WslHostLogged -Description "使用 --no-launch 安装 $targetName..." -Arguments @('--install', '-d', $targetName, '--no-launch')
+            if ($installResult.ExitCode -ne 0) {
                 Write-Host "  --no-launch 不支持，改用标准安装..." -ForegroundColor Yellow
-                wsl --install -d $targetName 2>&1
-                if ($LASTEXITCODE -ne 0) { throw "Ubuntu-${ubuntuVer} 安装失败，请检查网络" }
+                $installResult = Invoke-WslHostLogged -Description "使用标准命令安装 $targetName..." -Arguments @('--install', '-d', $targetName)
+                if ($installResult.ExitCode -ne 0) {
+                    throw "Ubuntu-${ubuntuVer} 安装失败（退出码 $($installResult.ExitCode)）。WSL 输出: $($installResult.Output)。这可能是网络、Microsoft Store/WSL 组件或待重启状态，不应仅归因于网络。详细日志: $LogFile"
+                }
             }
         }
 

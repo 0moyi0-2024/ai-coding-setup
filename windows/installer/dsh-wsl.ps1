@@ -8,22 +8,34 @@
 
 function Invoke-WslHidden {
     <# 隐藏窗口执行 WSL 命令，返回 stdout+stderr #>
-    param([string]$Command, [int]$TimeoutMs = 15000)
+    param(
+        [string]$Command,
+        [int]$TimeoutMs = 15000,
+        [switch]$ThrowOnError
+    )
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "wsl.exe"
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Command))
     if ($global:WSL_DISTRO -ne "") {
-        $psi.Arguments = "-d $global:WSL_DISTRO -- bash -c `"$Command`""
+        $psi.Arguments = "-d `"$global:WSL_DISTRO`" -- bash -c `"echo $encodedCommand | base64 -d | bash`""
     } else {
-        $psi.Arguments = "-- bash -c `"$Command`""
+        $psi.Arguments = "-- bash -c `"echo $encodedCommand | base64 -d | bash`""
     }
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
     $psi.CreateNoWindow = $true
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $psi.Environment["WSL_UTF8"] = "1"
 
-    $p = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $p = [System.Diagnostics.Process]::Start($psi)
+    } catch {
+        throw "无法启动 wsl.exe: $($_.Exception.Message)"
+    }
     # 先异步读取，避免死锁（stdout/stderr 缓冲区满导致挂起）
     $outTask = $p.StandardOutput.ReadToEndAsync()
     $errTask = $p.StandardError.ReadToEndAsync()
@@ -31,12 +43,19 @@ function Invoke-WslHidden {
         try { $p.Kill() } catch {}
         $out = $outTask.Result
         $err = $errTask.Result
-        return "${out}`n[TIMEOUT after ${TimeoutMs}ms]`n${err}"
+        $result = "${out}`n[TIMEOUT after ${TimeoutMs}ms]`n${err}".Trim()
+        if ($ThrowOnError) { throw "WSL 命令执行超时（${TimeoutMs}ms）：`n$result" }
+        return $result
     }
     $out = $outTask.Result
     $err = $errTask.Result
+    $exitCode = $p.ExitCode
     try { $p.Dispose() } catch {}
-    return "${out}`n${err}"
+    $result = "${out}`n${err}".Trim()
+    if ($ThrowOnError -and $exitCode -ne 0) {
+        throw "WSL 命令执行失败（退出码 $exitCode）：`n$result"
+    }
+    return $result
 }
 
 function Invoke-WslVisible {
@@ -45,13 +64,50 @@ function Invoke-WslVisible {
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "wsl.exe"
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Command))
     if ($global:WSL_DISTRO -ne "") {
-        $psi.Arguments = "-d $global:WSL_DISTRO -- bash -c '$Command'"
+        $psi.Arguments = "-d `"$global:WSL_DISTRO`" -- bash -c `"echo $encodedCommand | base64 -d | bash`""
     } else {
-        $psi.Arguments = "-- bash -c '$Command'"
+        $psi.Arguments = "-- bash -c `"echo $encodedCommand | base64 -d | bash`""
     }
     $psi.UseShellExecute = $true
     return [System.Diagnostics.Process]::Start($psi)
+}
+
+function Assert-DshWslReady {
+    <# 验证托盘实际使用的 DSH 发行版，失败时给出可执行的修复提示。 #>
+    if (-not (Get-Command "wsl.exe" -ErrorAction SilentlyContinue)) {
+        throw "未找到 wsl.exe。请重新运行「一键安装 DSH」并完成 WSL 安装。"
+    }
+
+    $recordedDistro = ""
+    if ($global:DshDistroFile -and (Test-Path -LiteralPath $global:DshDistroFile -PathType Leaf)) {
+        $recordedDistro = (Get-Content -LiteralPath $global:DshDistroFile -Raw -ErrorAction Stop).Trim()
+    }
+
+    $distroOutput = (& wsl.exe --list --quiet 2>&1 | Out-String) -replace "`0", ""
+    $listExitCode = $LASTEXITCODE
+    if ($listExitCode -ne 0) {
+        throw "WSL 当前不可用（退出码 $listExitCode）：$($distroOutput.Trim())。请先重启 Windows；若已重启，请重新运行「一键安装 DSH」。"
+    }
+    $distros = @($distroOutput -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($distros.Count -eq 0) {
+        throw "WSL 已启用，但没有安装 DSH 使用的 Ubuntu 发行版。请重新运行「一键安装 DSH」。"
+    }
+
+    if ($recordedDistro) {
+        if ($distros -notcontains $recordedDistro) {
+            throw "DSH 记录的 WSL 发行版「$recordedDistro」不存在。请重新运行「一键安装 DSH」修复安装。"
+        }
+        $global:WSL_DISTRO = $recordedDistro
+    }
+
+    $homeCheck = Invoke-WslHidden "test -d '$global:DSH_HOME' && echo DSH-READY" 10000 -ThrowOnError
+    if ($homeCheck -notmatch "DSH-READY") {
+        $distroLabel = if ($global:WSL_DISTRO) { $global:WSL_DISTRO } else { "默认发行版" }
+        throw "WSL 可用，但 $distroLabel 中没有找到 DSH 安装目录 $global:DSH_HOME。请重新运行「一键安装 DSH」。"
+    }
+    return $true
 }
 
 # --- .env 临时文件管理 ---
@@ -72,13 +128,13 @@ function Write-DshEnvFile {
     $content = $lines -join "`n"
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($content))
     $cmd = "echo '$b64' | base64 -d > '$global:DSH_ENV_FILE' && chmod 600 '$global:DSH_ENV_FILE' && echo OK"
-    $result = Invoke-WslHidden $cmd
+    $result = Invoke-WslHidden $cmd -ThrowOnError
     return ($result -match "OK")
 }
 
 function Remove-DshEnvFile {
     <# 删除 WSL 内临时 .env #>
-    Invoke-WslHidden "rm -f '$global:DSH_ENV_FILE' 2>/dev/null; echo OK" | Out-Null
+    Invoke-WslHidden "rm -f '$global:DSH_ENV_FILE' 2>/dev/null; echo OK" -ThrowOnError | Out-Null
 }
 
 function Test-DshEnvFile {

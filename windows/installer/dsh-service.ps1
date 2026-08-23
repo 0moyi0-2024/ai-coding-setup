@@ -12,6 +12,8 @@ function Start-DshService {
     <# 启动 DSH：检查Token → 写.env → 后台启动 → 验证端口 #>
     if ($script:IsRunning) { return $true }
 
+    Assert-DshWslReady | Out-Null
+
     # 1. 检查 Token
     $tokens = Get-DshTokens
     $hasAny = $false
@@ -28,7 +30,7 @@ function Start-DshService {
 
     # 3. 后台启动 DSH
     $startCmd = "cd $global:DSH_HOME && nohup pnpm dsh $global:DSH_PROFILE --port $global:DSH_PORT > $global:DSH_LOG_FILE 2>&1 &"
-    Invoke-WslHidden $startCmd 10000 | Out-Null
+    Invoke-WslHidden $startCmd 10000 -ThrowOnError | Out-Null
     Start-Sleep -Seconds 4
 
     # 4. 验证端口
@@ -58,19 +60,17 @@ function Stop-DshService {
 
 function Test-DshRunning {
     <# 快速检测 DSH 是否在运行（端口检测） #>
-    if ($script:IsRunning) {
-        try {
-            $req = [System.Net.WebRequest]::Create("http://localhost:$global:DSH_PORT")
-            $req.Timeout = 2000
-            $resp = $req.GetResponse()
-            $resp.Close()
-            return $true
-        } catch {
-            $script:IsRunning = $false
-            return $false
-        }
+    try {
+        $req = [System.Net.WebRequest]::Create("http://localhost:$global:DSH_PORT")
+        $req.Timeout = 2000
+        $resp = $req.GetResponse()
+        $resp.Close()
+        $script:IsRunning = $true
+        return $true
+    } catch {
+        $script:IsRunning = $false
+        return $false
     }
-    return $false
 }
 
 # --- 浏览器控制 ---
@@ -87,12 +87,14 @@ function Open-DshBrowser {
     } catch {
         # 先尝试启动 DSH
         if (-not $script:IsRunning) {
-            try { Start-DshService | Out-Null; Start-Sleep -Seconds 5 } catch {}
+            Start-DshService | Out-Null
+            Start-Sleep -Seconds 5
         }
         if ($script:IsRunning) {
             $script:BrowserProcess = Start-Process $url -PassThru
+            return $true
         }
-        return $script:IsRunning
+        throw "DSH 服务未启动，无法打开 Web 界面。"
     }
 }
 
