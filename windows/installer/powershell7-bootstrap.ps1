@@ -27,6 +27,93 @@ function Write-DshBootstrapLog {
     }
 }
 
+function ConvertTo-DshProxyUrl {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    $proxy = $Value.Trim()
+    if ($proxy -match ';') {
+        $entries = @{}
+        foreach ($entry in $proxy -split ';') {
+            if ($entry -match '^\s*([^=]+)=(.+)$') {
+                $entries[$matches[1].Trim().ToLowerInvariant()] = $matches[2].Trim()
+            }
+        }
+        $proxy = if ($entries.ContainsKey('https')) {
+            $entries['https']
+        } elseif ($entries.ContainsKey('http')) {
+            $entries['http']
+        } else {
+            ($proxy -split ';')[0].Trim()
+        }
+    }
+    if ($proxy -match '^[^=]+=(.+)$') { $proxy = $matches[1].Trim() }
+    if ($proxy -notmatch '^[a-z][a-z0-9+.-]*://') { $proxy = "http://$proxy" }
+
+    try {
+        $uri = [Uri]$proxy
+        if (-not $uri.Host -or $uri.Port -le 0) { return $null }
+        return $uri.AbsoluteUri.TrimEnd('/')
+    } catch {
+        return $null
+    }
+}
+
+function Get-DshProxyUrl {
+    $candidates = @(
+        $env:HTTPS_PROXY,
+        $env:https_proxy,
+        $env:HTTP_PROXY,
+        $env:http_proxy
+    )
+    try {
+        $internetSettings = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+        if ([int]$internetSettings.ProxyEnable -eq 1) {
+            $candidates += $internetSettings.ProxyServer
+        }
+    } catch {}
+
+    foreach ($candidate in $candidates) {
+        $proxy = ConvertTo-DshProxyUrl $candidate
+        if ($proxy) { return $proxy }
+    }
+    return $null
+}
+
+function Get-DshProxyDisplayName {
+    param([string]$ProxyUrl)
+
+    try {
+        $uri = [Uri]$ProxyUrl
+        return "$($uri.Scheme)://$($uri.Host):$($uri.Port)"
+    } catch {
+        return '(已配置)'
+    }
+}
+
+function Get-DshLatestPowerShellRelease {
+    param(
+        [Parameter(Mandatory)][hashtable]$Headers,
+        [hashtable]$WebRequestOptions = @{}
+    )
+
+    try {
+        $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest' `
+            -Headers $Headers -UseBasicParsing -TimeoutSec 60 @WebRequestOptions
+        if ($release.tag_name) { return [string]$release.tag_name }
+    } catch {
+        Write-DshBootstrapLog "GitHub API 查询失败，改用官方 Release 重定向页面: $($_.Exception.Message)" 'WARN'
+    }
+
+    $response = Invoke-WebRequest -Uri 'https://github.com/PowerShell/PowerShell/releases/latest' `
+        -Headers $Headers -UseBasicParsing -MaximumRedirection 5 -TimeoutSec 60 @WebRequestOptions
+    $location = $response.BaseResponse.ResponseUri.AbsoluteUri
+    if ($location -notmatch '/tag/(v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)') {
+        throw "无法从 PowerShell 官方 Release 地址解析版本: $location"
+    }
+    return $matches[1]
+}
+
 function Find-DshPowerShell7 {
     # Prefer real installation paths. A stale WindowsApps execution alias can
     # exist in PATH before the newly installed package registration settles.
@@ -101,23 +188,30 @@ function Install-DshPowerShell7FromOfficialRelease {
     } else {
         $env:PROCESSOR_ARCHITECTURE
     }
-    $assetPattern = switch -Regex ($architecture) {
-        '^(AMD64|x64)$' { '^PowerShell-.*-win-x64\.msi$'; break }
-        '^(ARM64)$'     { '^PowerShell-.*-win-arm64\.msi$'; break }
-        '^(x86)$'       { '^PowerShell-.*-win-x86\.msi$'; break }
+    $assetArchitecture = switch -Regex ($architecture) {
+        '^(AMD64|x64)$' { 'x64'; break }
+        '^(ARM64)$'     { 'arm64'; break }
+        '^(x86)$'       { 'x86'; break }
         default         { throw "不支持的 Windows 架构: $architecture" }
     }
 
     Write-DshBootstrapLog "正在查询 Microsoft PowerShell 官方 Release..."
     $headers = @{ 'User-Agent' = 'DSH-Windows-Installer' }
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/PowerShell/PowerShell/releases/latest" -Headers $headers -UseBasicParsing -TimeoutSec 60
-    $asset = $release.assets | Where-Object { $_.name -match $assetPattern } | Select-Object -First 1
-    if (-not $asset) { throw "官方 Release 中未找到适用于 $architecture 的 PowerShell 7 MSI" }
+    $proxy = Get-DshProxyUrl
+    $webRequestOptions = @{}
+    if ($proxy) {
+        $webRequestOptions['Proxy'] = $proxy
+        Write-DshBootstrapLog "下载请求使用系统代理: $(Get-DshProxyDisplayName $proxy)"
+    }
+    $tagName = Get-DshLatestPowerShellRelease -Headers $headers -WebRequestOptions $webRequestOptions
+    $version = $tagName.TrimStart('v')
+    $assetName = "PowerShell-$version-win-$assetArchitecture.msi"
+    $assetUrl = "https://github.com/PowerShell/PowerShell/releases/download/$tagName/$assetName"
 
-    $msiPath = Join-Path $env:TEMP $asset.name
+    $msiPath = Join-Path $env:TEMP $assetName
     try {
-        Write-DshBootstrapLog "正在从 Microsoft 官方仓库下载 $($asset.name)..."
-        Invoke-WebRequest -Uri $asset.browser_download_url -Headers $headers -OutFile $msiPath -UseBasicParsing -TimeoutSec 600
+        Write-DshBootstrapLog "正在从 Microsoft 官方仓库下载 $assetName..."
+        Invoke-WebRequest -Uri $assetUrl -Headers $headers -OutFile $msiPath -UseBasicParsing -TimeoutSec 600 @webRequestOptions
         $signature = Get-AuthenticodeSignature -FilePath $msiPath
         if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft') {
             throw "PowerShell 7 MSI 的 Microsoft 数字签名验证失败: $($signature.Status)"
@@ -144,11 +238,17 @@ function Install-DshPowerShell7 {
     if ($winget) {
         Write-DshBootstrapLog "未找到 PowerShell 7，正在通过 winget 安装..."
         try {
-            $process = Start-Process -FilePath $winget.Source -ArgumentList @(
+            $wingetArguments = @(
                 'install', '--id', 'Microsoft.PowerShell', '--exact', '--source', 'winget',
                 '--scope', 'machine', '--silent', '--accept-source-agreements',
                 '--accept-package-agreements', '--disable-interactivity'
-            ) -PassThru
+            )
+            $proxy = Get-DshProxyUrl
+            if ($proxy) {
+                $wingetArguments += @('--proxy', $proxy)
+                Write-DshBootstrapLog "winget 使用系统代理: $(Get-DshProxyDisplayName $proxy)"
+            }
+            $process = Start-Process -FilePath $winget.Source -ArgumentList $wingetArguments -PassThru
             $exitCode = Wait-DshProcess -Process $process -TimeoutSeconds 900 -Description 'winget 安装 PowerShell 7'
             if ($exitCode -ne 0) {
                 Write-DshBootstrapLog "winget 安装失败（退出码 $exitCode），改用 Microsoft 官方 MSI。" 'WARN'

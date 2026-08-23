@@ -108,6 +108,7 @@ var
   PowerShellPath: String;
   BootstrapLogPath: String;
   BootstrapLog: AnsiString;
+  BootstrapLogText: String;
 begin
   Result := '';
   ExtractTemporaryFile('powershell7-bootstrap.ps1');
@@ -128,9 +129,10 @@ begin
       '详细日志: ' + BootstrapLogPath;
     if LoadStringFromFile(BootstrapLogPath, BootstrapLog) then
     begin
-      if Length(BootstrapLog) > 1200 then
-        BootstrapLog := Copy(BootstrapLog, Length(BootstrapLog) - 1199, 1200);
-      Result := Result + #13#10 + #13#10 + BootstrapLog;
+      BootstrapLogText := UTF8Decode(BootstrapLog);
+      if Length(BootstrapLogText) > 1200 then
+        BootstrapLogText := Copy(BootstrapLogText, Length(BootstrapLogText) - 1199, 1200);
+      Result := Result + #13#10 + #13#10 + BootstrapLogText;
     end;
   end;
 end;
