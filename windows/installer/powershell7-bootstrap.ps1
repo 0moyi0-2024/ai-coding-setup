@@ -1,10 +1,13 @@
 ﻿param(
     [switch]$InstallOnly,
-    [string]$LogPath
+    [string]$LogPath,
+    [switch]$ElevatedAttempt
 )
 
 $ErrorActionPreference = "Stop"
 $script:DshBootstrapLogPath = $LogPath
+$script:DshBootstrapScriptPath = $PSCommandPath
+$script:DshElevationAttempted = [bool]$ElevatedAttempt
 
 function Write-DshBootstrapLog {
     param(
@@ -25,6 +28,43 @@ function Write-DshBootstrapLog {
             Write-Host "无法写入 PowerShell 7 安装日志: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
+}
+
+function Test-DshAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Invoke-DshPowerShell7InstallElevated {
+    if ($script:DshElevationAttempted) {
+        throw '已请求管理员权限，但当前进程仍不是管理员。请确认 UAC 或组织策略允许提权。'
+    }
+    if (-not $script:DshBootstrapScriptPath -or
+        -not (Test-Path -LiteralPath $script:DshBootstrapScriptPath -PathType Leaf)) {
+        throw "找不到用于管理员提权的 PowerShell 7 引导脚本: $script:DshBootstrapScriptPath"
+    }
+
+    $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
+        throw "找不到 Windows PowerShell: $windowsPowerShell"
+    }
+
+    Write-DshBootstrapLog '安装 PowerShell 7 需要管理员权限，正在请求 UAC 授权...'
+    $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "{0}" -InstallOnly -ElevatedAttempt' -f $script:DshBootstrapScriptPath
+    if ($script:DshBootstrapLogPath) {
+        $arguments += ' -LogPath "{0}"' -f $script:DshBootstrapLogPath
+    }
+
+    try {
+        $process = Start-Process -FilePath $windowsPowerShell -ArgumentList $arguments -Verb RunAs -Wait -PassThru
+    } catch {
+        throw "无法获得管理员权限，UAC 可能已被取消或阻止: $($_.Exception.Message)"
+    }
+
+    $pwsh = Find-DshPowerShell7
+    if ($pwsh) { return $pwsh }
+    throw "管理员安装进程结束后仍未检测到 PowerShell 7，退出码: $($process.ExitCode)"
 }
 
 function ConvertTo-DshProxyUrl {
@@ -233,6 +273,10 @@ function Install-DshPowerShell7FromOfficialRelease {
 function Install-DshPowerShell7 {
     $pwsh = Find-DshPowerShell7
     if ($pwsh) { return $pwsh }
+
+    if (-not (Test-DshAdministrator)) {
+        return Invoke-DshPowerShell7InstallElevated
+    }
 
     $winget = Get-Command "winget.exe" -ErrorAction SilentlyContinue
     if ($winget) {

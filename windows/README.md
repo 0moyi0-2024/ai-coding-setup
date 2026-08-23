@@ -74,7 +74,9 @@ Artifacts 通常需要登录 GitHub 才能下载。发布正式 Release 时，�
 
 PowerShell 7 自动安装失败时，安装向导会显示具体失败阶段，完整日志保存在 `%ProgramData%\DSH\logs\powershell7-install.log`。安装包已使用当前进程级 `ExecutionPolicy Bypass`，无需为了安装 DSH 永久执行 `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`；由域组策略强制的限制除外。
 
-安装器会自动读取 `HTTPS_PROXY`、`HTTP_PROXY` 或 Windows 当前用户的系统代理设置，并将代理传给 `winget` 和 PowerShell 下载请求。Clash、Mihomo 等代理软件只需开启“系统代理”，无需把本机端口写入项目配置。
+PowerShell 7 引导器会自动读取 `HTTPS_PROXY`、`HTTP_PROXY` 或 Windows 当前用户的系统代理设置，并将代理传给 Windows 侧的 `winget` 和 PowerShell 下载请求。Clash、Mihomo 等代理软件只需开启“系统代理”，无需把本机端口写入项目配置。此设置不会把 Windows 的 `127.0.0.1` 代理写入 WSL；WSL 内的 GitHub、npm 和 NodeSource 连通性由安装脚本另行预检。
+
+完整安装包会在开始时请求管理员权限。如果 PowerShell 7 引导脚本被非管理员进程直接调用且确实需要安装，脚本也会通过 Windows UAC 自行重新启动为管理员；用户取消 UAC 或组织策略禁止提权时会停止安装并记录原因。
 
 开发者需要本地构建时，在 PowerShell 7 中运行：
 
