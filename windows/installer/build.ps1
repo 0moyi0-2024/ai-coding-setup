@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     DSH 一键构建脚本
 .DESCRIPTION
@@ -19,6 +19,22 @@ $ChineseLanguageUrl = "https://raw.githubusercontent.com/jrsoftware/issrc/main/F
 
 Write-Host "=== 构建开始 ==="
 Write-Host "ScriptDir: $ScriptDir"
+
+# Windows PowerShell 5.1 会按系统代码页读取无 BOM 的 UTF-8 脚本，导致中文
+# 字符串被破坏并触发语法错误。安装包中的所有 PowerShell 文件必须带 UTF-8 BOM。
+Write-Host "[-1] 检查 PowerShell 文件编码..."
+$invalidEncoding = @()
+Get-ChildItem $ScriptDir -Filter "*.ps1" -File | ForEach-Object {
+    $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+    if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+        $invalidEncoding += $_.Name
+    }
+}
+if ($invalidEncoding.Count -gt 0) {
+    Write-Host "  ❌ 以下文件不是 UTF-8 with BOM: $($invalidEncoding -join ', ')" -ForegroundColor Red
+    exit 1
+}
+Write-Host "  ✅ 所有 PowerShell 文件均为 UTF-8 with BOM"
 
 # ===== 加载配置 =====
 Write-Host "[0] 加载 config.ps1..."
@@ -170,7 +186,7 @@ Write-Host "[3] 验证文件..."
 $required = @(
     "DSH-一键安装.exe", "DSH-Tray.exe", "清理DSH.exe",
     "install-dsh-wsl.ps1", "DSH-Tray.ps1", "清理DSH.ps1",
-    "dsh-crypto.ps1", "dsh-wsl.ps1", "dsh-service.ps1", "config.ps1",
+    "dsh-crypto.ps1", "dsh-wsl.ps1", "dsh-service.ps1", "config.ps1", "powershell7-bootstrap.ps1",
     "DSH-Web-启动.bat", "icon.ico", "uninstall-notes.txt"
 )
 foreach ($f in $required) {
@@ -255,7 +271,7 @@ if (-not $SkipInnoSetup) {
             $configContent = Get-Content (Join-Path $ScriptDir "config.ps1") -Raw -Encoding UTF8
             $configContent = $configContent -replace '(?m)^(\$script:DSH_VERSION\s*=\s*)"[^"]*"', ('${1}"' + $global:DSH_VERSION + '"')
             $tempConfig = Join-Path $ScriptDir ".DSH-Build-config-$([guid]::NewGuid().ToString('N')).ps1"
-            Set-Content $tempConfig -Value $configContent -Encoding UTF8 -NoNewline
+            [System.IO.File]::WriteAllText($tempConfig, $configContent, [System.Text.UTF8Encoding]::new($true))
             $tempConfigName = Split-Path $tempConfig -Leaf
             $issContent = $issContent -replace 'Source: "config\.ps1"; DestDir: "\{app\}"', ('Source: "' + $tempConfigName + '"; DestDir: "{app}"; DestName: "config.ps1"')
             $issContent = $issContent -replace 'Source: "config\.ps1"; DestDir: "\{app\}\\source"', ('Source: "' + $tempConfigName + '"; DestDir: "{app}\source"; DestName: "config.ps1"')

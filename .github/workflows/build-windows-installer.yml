@@ -115,11 +115,7 @@ jobs:
           name: DSH-Windows-Installer
           # 保留 30 天（默认 90 天，节省空间）
           retention-days: 30
-          path: |
-            windows/installer/DSH-一键安装-*.exe
-            windows/installer/DSH-一键安装.exe
-            windows/installer/DSH-Tray.exe
-            windows/installer/清理DSH.exe
+          path: windows/installer/DSH-一键安装-*.exe
 
       # =================================================================
       # Step 8: 发布 Release 时自动附加安装包
@@ -128,8 +124,4 @@ jobs:
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            windows/installer/DSH-一键安装-*.exe
-            windows/installer/DSH-一键安装.exe
-            windows/installer/DSH-Tray.exe
-            windows/installer/清理DSH.exe
+          files: windows/installer/DSH-一键安装-*.exe

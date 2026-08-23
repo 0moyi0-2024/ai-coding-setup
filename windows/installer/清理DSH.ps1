@@ -1,12 +1,10 @@
-<#
+﻿<#
 .SYNOPSIS
     DeepSeek Harness (DSH) 安装失败清理工具
 .DESCRIPTION
     如果安装过程中断或失败，运行此脚本清理所有残留文件
     包括：WSL Ubuntu 发行版、DSH 源码、环境变量、快捷方式等
 #>
-#requires -Version 7
-
 param(
     [switch]$Force,        # 跳过确认，直接清理
     [string]$Distro        # 可显式指定要清理的 WSL 发行版
@@ -31,6 +29,17 @@ $ScriptDir = if ($MyInvocation.MyCommand.Path) {
     $PSScriptRoot
 } else {
     Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+}
+. (Join-Path $ScriptDir "powershell7-bootstrap.ps1")
+$restartArguments = @()
+if ($Force) { $restartArguments += '-Force' }
+if ($Distro) { $restartArguments += @('-Distro', $Distro) }
+$restartScript = Join-Path $ScriptDir "source\清理DSH.ps1"
+if (-not (Test-Path -LiteralPath $restartScript -PathType Leaf) -and $PSCommandPath -and [IO.Path]::GetExtension($PSCommandPath) -ieq '.ps1') {
+    $restartScript = $PSCommandPath
+}
+if (Restart-DshScriptInPowerShell7 -ScriptPath $restartScript -ScriptArguments $restartArguments -Wait) {
+    exit 0
 }
 $SelfPath = if ($PSCommandPath) {
     $PSCommandPath
@@ -69,7 +78,7 @@ if (-not $isAdmin) {
     if ($IsCompiledExecutable) {
         Start-Process -FilePath $SelfPath -ArgumentList "-Force" -Verb RunAs
     } else {
-        Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$SelfPath`"" -Verb RunAs
+        Start-Process -FilePath (Join-Path $PSHOME "pwsh.exe") -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$SelfPath`"" -Verb RunAs
     }
     exit
 }

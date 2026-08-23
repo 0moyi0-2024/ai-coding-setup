@@ -37,6 +37,7 @@
 | **权限** | 管理员权限 |
 | **磁盘空间** | 至少 10GB 可用空间 |
 | **网络** | WSL 需要能访问 GitHub、npm；未安装 Node.js 时还需要访问 NodeSource |
+| **PowerShell** | 安装包会检查 PowerShell 7，缺失时通过 winget 或 Microsoft 官方签名 MSI 自动安装 |
 
 ## 使用方法
 
@@ -65,9 +66,11 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 1. 打开仓库的 [GitHub Actions 页面](https://github.com/0moyi0-2024/ai-coding-setup/actions)。
 2. 选择最新的成功运行记录（绿色勾号），进入详情页。
 3. 滚动到页面底部的 **Artifacts** 区域，点击 `DSH-Windows-Installer` 下载 ZIP 文件。
-4. 解压 ZIP 文件，运行其中的 `DSH-一键安装-<版本号>.exe`；也可以先单独运行 `DSH-一键安装.exe`、`DSH-Tray.exe` 或 `清理DSH.exe`。
+4. 解压 ZIP 文件，运行其中的 `DSH-一键安装-<版本号>.exe`。
 
 Artifacts 通常需要登录 GitHub 才能下载。发布正式 Release 时，请使用 `v0.1.0-rc.9` 这类语义化版本标签；完整安装包会附加在 [Releases 页面](https://github.com/0moyi0-2024/ai-coding-setup/releases)，并自动使用标签版本号。
+
+构建过程中产生的三个无版本号 EXE 是完整安装包的内部组件，运行时依赖安装目录中的脚本和模块，不作为独立安装包发布。完整安装包会先检查 PowerShell 7；本机缺失时自动安装并验证，只有 PowerShell 7 就绪后才会继续复制文件和初始化 DSH。
 
 开发者需要本地构建时，在 PowerShell 7 中运行：
 
@@ -152,7 +155,7 @@ $WSL_DISTRO = "Ubuntu-22.04"   # 手动指定，跳过自动检测
 
 ### Claude 安装命令与网络错误
 
-本项目的 Windows 安装包不会调用 `irm https://claude.ai/install.ps1 | iex`，也不会安装 Claude Code 或 Claude 桌面客户端。配置中的 Claude 选项只用于保存 `ANTHROPIC_API_KEY`。安装包 EXE 会临时使用当前进程级 `Bypass` 加载随包提供的本地模块，不会修改用户或系统的持久执行策略。
+本项目的 Windows 安装包不会调用 `irm https://claude.ai/install.ps1 | iex`，也不会安装 Claude Code 或 Claude 桌面客户端。配置中的 Claude 选项只用于保存 `ANTHROPIC_API_KEY`。安装包会确保 PowerShell 7 已安装，DSH 的实际脚本逻辑会由 `pwsh.exe` 执行；EXE 仅在当前进程临时使用 `Bypass`，不会修改用户或系统的持久执行策略。
 
 如果你另外安装 Claude Code 时看到“无法连接到远程服务器”，表示当前 Windows 网络无法访问 `claude.ai`，与 DSH 安装包构建、PowerShell 执行策略和管理员权限无关。`claude.ai/install.ps1` 是 Claude Code 的 Windows 安装脚本，不是 Claude 桌面客户端安装包。请只按照 Claude Code 官方文档操作；若要审查远程脚本，应先下载到文件、检查内容，确认来源后再单独执行，不要直接将未知脚本传给 `iex`。
 

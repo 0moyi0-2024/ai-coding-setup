@@ -41,6 +41,9 @@ Name: "chinese"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
+; 安装前用于检查并安装 PowerShell 7，同时安装后供 EXE 启动器复用
+Source: "powershell7-bootstrap.ps1"; Flags: dontcopy
+Source: "powershell7-bootstrap.ps1"; DestDir: "{app}"; Flags: ignoreversion
 ; 核心程序（编译后的 exe，无需 PowerShell 即可运行）
 Source: "DSH-一键安装.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; 清理程序（编译后的 exe）
@@ -52,6 +55,7 @@ Source: "DSH-Tray.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "install-dsh-wsl.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
 Source: "DSH-Tray.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
 Source: "清理DSH.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
+Source: "powershell7-bootstrap.ps1"; DestDir: "{app}\source"; Flags: ignoreversion
 
 ; 共享模块（exe 运行时需要，必须与 exe 同目录）
 Source: "config.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -97,6 +101,28 @@ Filename: "{app}\{#MyAppExeName}"; Description: "立即开始安装 DSH"; Flags:
 Filename: "{cmd}"; Parameters: "/c echo 卸载完成。DSH 安装目录 {app} 中的文件已删除。如果 WSL 发行版不再需要，请运行 清理DSH.exe 自动清理"; Flags: runhidden; RunOnceId: "DSHUninstallMessage"
 
 [Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+  BootstrapPath: String;
+  PowerShellPath: String;
+begin
+  Result := '';
+  ExtractTemporaryFile('powershell7-bootstrap.ps1');
+  BootstrapPath := ExpandConstant('{tmp}\powershell7-bootstrap.ps1');
+  PowerShellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  if not Exec(PowerShellPath,
+    '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + BootstrapPath + '" -InstallOnly',
+    '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Result := '无法启动 PowerShell 7 依赖安装程序。';
+    exit;
+  end;
+  if ResultCode <> 0 then
+    Result := 'PowerShell 7 安装或验证失败，退出码: ' + IntToStr(ResultCode) +
+      '。请先从 https://aka.ms/powershell-release?tag=stable 安装后重试。';
+end;
+
 function InitializeSetup: Boolean;
 begin
   Result := True;

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 #  DeepSeek Harness (DSH) 一键安装脚本 — Windows + WSL
 #  从零到一：自动检测 Windows 版本 → 安装 WSL → 安装 DSH → 配置 → 测试验证
 #
@@ -23,7 +23,6 @@
 #    .\install-dsh-wsl.ps1 -Step 3    # 只配置 DSH
 # =============================================================================
 
-#requires -Version 7
 #requires -RunAsAdministrator
 
 param(
@@ -50,6 +49,15 @@ $ScriptDir = if ($MyInvocation.MyCommand.Path) {
     $PSScriptRoot
 } else {
     Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+}
+. (Join-Path $ScriptDir "powershell7-bootstrap.ps1")
+$restartArguments = if ($Step -ne 'all') { @('-Step', $Step) } else { @() }
+$restartScript = Join-Path $ScriptDir "source\install-dsh-wsl.ps1"
+if (-not (Test-Path -LiteralPath $restartScript -PathType Leaf) -and $PSCommandPath -and [IO.Path]::GetExtension($PSCommandPath) -ieq '.ps1') {
+    $restartScript = $PSCommandPath
+}
+if (Restart-DshScriptInPowerShell7 -ScriptPath $restartScript -ScriptArguments $restartArguments -Wait) {
+    exit 0
 }
 $LogFile = Join-Path $ScriptDir "dsh-install-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 

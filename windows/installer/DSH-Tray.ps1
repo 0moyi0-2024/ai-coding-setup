@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     DeepSeek Harness 系统托盘管理器 v0.1.0-rc.8
 .DESCRIPTION
@@ -32,6 +32,14 @@ $modDir = if ($PSScriptRoot) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
     Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+}
+. (Join-Path $modDir "powershell7-bootstrap.ps1")
+$restartScript = Join-Path $modDir "source\DSH-Tray.ps1"
+if (-not (Test-Path -LiteralPath $restartScript -PathType Leaf) -and $PSCommandPath -and [IO.Path]::GetExtension($PSCommandPath) -ieq '.ps1') {
+    $restartScript = $PSCommandPath
+}
+if (Restart-DshScriptInPowerShell7 -ScriptPath $restartScript -Hidden) {
+    exit 0
 }
 . (Join-Path $modDir "config.ps1")
 . (Join-Path $modDir "dsh-crypto.ps1")
