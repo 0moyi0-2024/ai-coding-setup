@@ -76,6 +76,7 @@
 - PowerShell 7 自动安装失败时，错误窗口会显示具体原因；完整日志保存在 `%ProgramData%\DSH\logs\powershell7-install.log`
 - PowerShell 7 的 Windows 侧下载会自动使用 `HTTPS_PROXY`、`HTTP_PROXY` 或 Windows 当前用户的系统代理；不会把 Windows 的 `127.0.0.1` 代理错误写入 WSL
 - 缺少 PowerShell 7 且当前进程不是管理员时，引导脚本会通过 UAC 自行提权；取消或禁止 UAC 会停止后续安装
+- WSL 可选功能缺失时会自动启用；返回 `3010` 或 `EnablePending` 时暂停安装并要求重启，避免在重启前继续执行
 - 安装包使用进程级 `ExecutionPolicy Bypass`，不要求用户永久修改 `CurrentUser` 或系统执行策略
 - 如果构建失败，请保留「构建 DSH Windows 安装包」步骤中从第一个 `Error` 开始的完整日志
 - `irm https://claude.ai/install.ps1 | iex` 不属于本项目的构建或安装流程；该命令失败表示 Windows 无法访问 Claude Code 的下载站点，不代表 DSH 安装包构建失败

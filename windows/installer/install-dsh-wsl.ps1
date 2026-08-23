@@ -23,8 +23,6 @@
 #    .\install-dsh-wsl.ps1 -Step 3    # 只配置 DSH
 # =============================================================================
 
-#requires -RunAsAdministrator
-
 param(
     [ValidateSet("all", "1", "2", "3")]
     [string]$Step = "all"
@@ -59,6 +57,56 @@ if (-not (Test-Path -LiteralPath $restartScript -PathType Leaf) -and $PSCommandP
 if (Restart-DshScriptInPowerShell7 -ScriptPath $restartScript -ScriptArguments $restartArguments -Wait) {
     exit 0
 }
+
+function Test-DshAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Ensure-DshAdministrator {
+    if (Test-DshAdministrator) { return }
+
+    $selfPath = if ($PSCommandPath) {
+        $PSCommandPath
+    } else {
+        [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    }
+    $isCompiledExecutable = [IO.Path]::GetExtension($selfPath) -ieq '.exe'
+    if (-not (Test-Path -LiteralPath $selfPath -PathType Leaf)) {
+        throw "找不到用于管理员提权的 DSH 安装入口: $selfPath"
+    }
+
+    Write-Host "[权限] 当前不是管理员，正在请求 UAC 权限..." -ForegroundColor Yellow
+    try {
+        if ($isCompiledExecutable) {
+            $startOptions = @{
+                FilePath = $selfPath
+                Verb = 'RunAs'
+                Wait = $true
+                PassThru = $true
+            }
+            if ($restartArguments.Count -gt 0) {
+                $startOptions['ArgumentList'] = $restartArguments
+            }
+            $elevated = Start-Process @startOptions
+        } else {
+            $pwshPath = Join-Path $PSHOME 'pwsh.exe'
+            $elevatedArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $selfPath
+            if ($Step -ne 'all') { $elevatedArguments += " -Step $Step" }
+            $elevated = Start-Process -FilePath $pwshPath -ArgumentList $elevatedArguments -Verb RunAs -Wait -PassThru
+        }
+    } catch {
+        throw "无法获得管理员权限，UAC 可能已取消或被组织策略阻止: $($_.Exception.Message)"
+    }
+
+    if ($null -ne $elevated.ExitCode -and $elevated.ExitCode -ne 0) {
+        throw "管理员安装子进程失败，退出码: $($elevated.ExitCode)"
+    }
+    exit 0
+}
+
+Ensure-DshAdministrator
 $LogFile = Join-Path $ScriptDir "dsh-install-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 
 # 加载共享配置（port, paths, version 等）
@@ -279,7 +327,10 @@ fi
 function Start-Part1-WSL {
     Write-Step "Part 1: 安装 WSL + Ubuntu"
 
-    # 1.1 管理员权限由 #requires -RunAsAdministrator 保证
+    # 1.1 入口已显式验证管理员令牌
+    if (-not (Test-DshAdministrator)) {
+        throw "WSL 安装必须在管理员权限下运行。"
+    }
     Write-Host "[1.1] 管理员权限 ✅" -ForegroundColor Green
 
     # 1.2 自动检测 Windows 版本并选择适配的发行版
@@ -296,36 +347,55 @@ function Start-Part1-WSL {
     $WSL_DISTRO = $script:WSL_DISTRO
     Test-OK "WSL 发行版已确定: $script:WSL_DISTRO"
 
-    # 1.3 检查 WSL 功能是否启用
+    # 1.3 同时检查 WSL 命令和两个 Windows 可选功能。仅有 wsl.exe
+    # 不代表虚拟机平台和 WSL 功能已经启用。
     Write-Host "[1.3] 检查 WSL 状态..."
-    $wslReady = $false
+    $wslCommandReady = $false
     try {
         wsl --version 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
-            $wslReady = $true
-            Write-Host "  WSL 功能已启用" -ForegroundColor Green
+            $wslCommandReady = $true
         }
     } catch {}
+
+    $virtualMachinePlatformState = (Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction Stop).State
+    $wslFeatureState = (Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction Stop).State
+    Write-Host "  wsl.exe: $(if ($wslCommandReady) { '可用' } else { '不可用' })"
+    Write-Host "  VirtualMachinePlatform: $virtualMachinePlatformState"
+    Write-Host "  Microsoft-Windows-Subsystem-Linux: $wslFeatureState"
+    $wslReady = $wslCommandReady -and
+        $virtualMachinePlatformState -eq 'Enabled' -and
+        $wslFeatureState -eq 'Enabled'
 
     if (-not $wslReady) {
         # 1.4 启用 WSL 功能
         Write-Host "[1.4] 启用 WSL 功能..."
         Write-Host "  正在启用 VirtualMachinePlatform 和 WSL..."
         $dismOk = $true
+        $restartRequired = $false
         dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  ❌ VirtualMachinePlatform 启用失败 (exit: $LASTEXITCODE)" -ForegroundColor Red
+        $virtualMachinePlatformExitCode = $LASTEXITCODE
+        if ($virtualMachinePlatformExitCode -notin @(0, 3010)) {
+            Write-Host "  ❌ VirtualMachinePlatform 启用失败 (exit: $virtualMachinePlatformExitCode)" -ForegroundColor Red
             $dismOk = $false
         }
+        if ($virtualMachinePlatformExitCode -eq 3010) { $restartRequired = $true }
         dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  ❌ WSL 功能启用失败 (exit: $LASTEXITCODE)" -ForegroundColor Red
+        $wslFeatureExitCode = $LASTEXITCODE
+        if ($wslFeatureExitCode -notin @(0, 3010)) {
+            Write-Host "  ❌ WSL 功能启用失败 (exit: $wslFeatureExitCode)" -ForegroundColor Red
             $dismOk = $false
         }
+        if ($wslFeatureExitCode -eq 3010) { $restartRequired = $true }
         if (-not $dismOk) {
-            throw "启用 WSL 功能失败，请以管理员身份运行 PowerShell 后重试"
+            throw "启用 WSL 功能失败。若日志包含退出码 740，表示当前进程没有管理员权限；请接受 UAC 提示后重试。"
         }
-        Write-Host "  WSL 功能已启用" -ForegroundColor Green
+        $virtualMachinePlatformState = (Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction Stop).State
+        $wslFeatureState = (Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction Stop).State
+        if ($virtualMachinePlatformState -eq 'EnablePending' -or $wslFeatureState -eq 'EnablePending') {
+            $restartRequired = $true
+        }
+        Write-Host "  WSL 功能已启用或等待重启后生效" -ForegroundColor Green
 
         Write-Host ""
         Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Yellow

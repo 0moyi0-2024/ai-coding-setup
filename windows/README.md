@@ -78,6 +78,8 @@ PowerShell 7 引导器会自动读取 `HTTPS_PROXY`、`HTTP_PROXY` 或 Windows �
 
 完整安装包会在开始时请求管理员权限。如果 PowerShell 7 引导脚本被非管理员进程直接调用且确实需要安装，脚本也会通过 Windows UAC 自行重新启动为管理员；用户取消 UAC 或组织策略禁止提权时会停止安装并记录原因。
 
+WSL 未安装时，安装脚本会在管理员权限下检查并启用 `VirtualMachinePlatform` 和 `Microsoft-Windows-Subsystem-Linux`，不要求用户预先手动执行 `wsl --install`。如果 Windows 返回 `3010` 或功能状态为 `EnablePending`，脚本会暂停后续 DSH 步骤并提示重启；重启后重新运行完整安装包即可继续。
+
 开发者需要本地构建时，在 PowerShell 7 中运行：
 
 ```powershell
