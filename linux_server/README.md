@@ -23,6 +23,30 @@ ai-coding-setup/
 
 `dsh_server/` 目录用于将 DSH Web 服务注册为 systemd 后台服务，支持开机自启和异常自动重启。详见 [dsh_server/README.md](dsh_server/README.md)。
 
+## systemd 说明
+
+systemd 不是本项目安装的第三方 npm 软件，而是 Linux 中常见的系统初始化和服务管理组件。
+Ubuntu、Debian、Fedora 等发行版通常已经随系统提供；本脚本只调用 `systemctl` 创建和管理服务
+单元，不会重复安装 systemd。
+
+检查当前环境是否可用：
+
+```bash
+command -v systemctl
+ps -p 1 -o comm=
+systemctl is-system-running
+```
+
+WSL 使用 systemd 需要较新的 WSL 版本，并在 `/etc/wsl.conf` 中启用：
+
+```ini
+[boot]
+systemd=true
+```
+
+修改后需从 Windows 侧执行 `wsl --shutdown`，再重新启动发行版。没有 systemd 的 Linux/WSL
+环境仍可以运行 Claude Code、Codex 和 CCR，但不会自动安装 systemd 服务；CCR 需要手动启动。
+
 ## 这套脚本会做什么
 
 脚本会完成以下工作：
@@ -199,8 +223,32 @@ hash -r
 
 ### 端口已被占用
 
-脚本会从 3456 开始寻找连续的三个空闲端口。重新运行 `--configure-only` 会重新选择
-端口。完成后可用 `ccr status` 检查状态。
+脚本默认从 3456 开始扫描连续的三个空闲端口，但实际端口由当前环境动态选择并写入
+`/agent/home/.claude-code-router/runtime.env`；CCR 启动器和 systemd 服务都会读取这个
+运行时文件，不会把 3456 当成固定端口。重新运行 `--configure-only` 会重新选择端口。
+也可以通过 `AI_SETUP_CCR_PORT_SCAN_START` 指定扫描起点。完成后可用 systemd 和端口检查状态。
+
+### CCR 开机自动启动（WSL 和普通 Linux）
+
+如果系统 PID 1 是 systemd（WSL 需要在 `/etc/wsl.conf` 中启用 `systemd=true`），配置阶段
+会自动安装并启用 `ai-coding-setup-ccr.service`。服务启动时读取保存的动态端口，网络就绪
+后启动 CCR；没有 systemd 的 Linux 环境不会修改系统启动文件，只会提示手动启动：
+
+```bash
+ccr start --host 127.0.0.1 --port "$(awk -F= '$1 == "CCR_MANAGEMENT_PORT" {print $2}' \
+  /agent/home/.claude-code-router/runtime.env)" --no-open --gateway
+```
+
+查看服务状态：
+
+```bash
+systemctl status ai-coding-setup-ccr.service
+ss -ltnp | grep -E '127\.0\.0\.1:[0-9]+'
+```
+
+如果 `systemctl is-system-running` 报错或 PID 1 不是 `systemd`，说明当前环境没有可用的
+systemd。此时不需要为了本脚本单独安装 npm 包；可以手动启动 CCR，或在已有的进程管理器
+（例如 Docker、Supervisor、runit）中托管 `/agent/bin/ccr-autostart`。
 
 ### 修改了 token，但模型列表没有更新
 

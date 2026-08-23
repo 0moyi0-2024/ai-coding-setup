@@ -2,6 +2,20 @@
 
 这个目录用于管理 DeepSeek Harness（`dsh`）的 Web 服务。
 
+脚本使用 Linux 的 systemd 管理后台进程。systemd 是发行版提供的系统服务管理组件，不是
+本仓库额外安装的 npm 软件；Ubuntu、Debian、Fedora 等系统通常已经自带。执行安装前可以
+检查：
+
+```bash
+command -v systemctl
+ps -p 1 -o comm=
+systemctl is-system-running
+```
+
+在 WSL 中，需要先在 `/etc/wsl.conf` 启用 `systemd=true`，然后从 Windows 侧执行
+`wsl --shutdown` 并重新进入发行版。没有 systemd 的环境不能使用本目录的 systemd 安装脚本，
+应改用该环境已有的进程管理器。
+
 ## 文件
 
 - `start_dsh_service.sh`：安装和管理 dsh 的 systemd 服务。

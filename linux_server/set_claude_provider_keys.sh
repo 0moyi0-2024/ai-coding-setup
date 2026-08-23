@@ -19,6 +19,10 @@ readonly CODEX_DIR="${AGENT_CONFIG_DIR}/codex"
 readonly CODEX_ENV_FILE="${CODEX_DIR}/gateways.env"
 readonly CODEX_MODEL_CATALOG_DIR="${CODEX_DIR}/catalogs"
 readonly NODE_INSTALL_DIR="${AGENT_DIR}/node"
+readonly CCR_RUNTIME_FILE="${CCR_DIR}/runtime.env"
+readonly CCR_SYSTEMD_UNIT="ai-coding-setup-ccr.service"
+readonly CCR_AUTOSTART_HELPER="${AGENT_BIN_DIR}/ccr-autostart"
+readonly CCR_PORT_SCAN_START="${AI_SETUP_CCR_PORT_SCAN_START:-3456}"
 readonly VOLCANO_MODEL_CANDIDATES='["deepseek-v4-flash","deepseek-v4-pro","qwen3.7-plus","qwen3.7-max","doubao-seed-2.1-pro","MiniMax-M3","glm-5.2","hy3"]'
 VOLCANO_MODELS='[]'
 BAILIAN_MODELS='[]'
@@ -33,9 +37,9 @@ readonly -a GATEWAY_KEY_NAMES=(
 )
 
 readonly CCR_HOST=127.0.0.1
-CCR_GATEWAY_PORT=3456
-CCR_CORE_PORT=3457
-CCR_MANAGEMENT_PORT=3458
+CCR_GATEWAY_PORT="${AI_SETUP_CCR_GATEWAY_PORT:-${CCR_PORT_SCAN_START}}"
+CCR_CORE_PORT=$((CCR_GATEWAY_PORT + 1))
+CCR_MANAGEMENT_PORT=$((CCR_GATEWAY_PORT + 2))
 CCR_GATEWAY_URL="http://${CCR_HOST}:${CCR_GATEWAY_PORT}"
 INSTALL_TOOLS=1
 CONFIGURE_GATEWAYS=1
@@ -135,21 +139,116 @@ write_runtime_files() {
   write_secure_file "${AGENT_ENV_FILE}" "${env_content}"
 
   printf -v claude_launcher \
-    '#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR=%q\nexec %q "$@"' \
-    "${CLAUDE_CONFIG_DIR}" "${NODE_INSTALL_DIR}/bin/claude"
+    '#!/usr/bin/env bash\nexport PATH=%q:%q:${PATH:-}\nexport CLAUDE_CONFIG_DIR=%q\nexec %q "$@"' \
+    "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" "${CLAUDE_CONFIG_DIR}" \
+    "${NODE_INSTALL_DIR}/bin/claude"
   write_executable_file "${AGENT_BIN_DIR}/claude" "${claude_launcher}"
 
   printf -v codex_launcher \
-    '#!/usr/bin/env bash\nexport CODEX_HOME=%q\n[[ ! -f %q ]] || source %q\nexec %q "$@"' \
-    "${CODEX_DIR}" "${CODEX_ENV_FILE}" "${CODEX_ENV_FILE}" \
+    '#!/usr/bin/env bash\nexport PATH=%q:%q:${PATH:-}\nexport CODEX_HOME=%q\n[[ ! -f %q ]] || source %q\nexec %q "$@"' \
+    "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" "${CODEX_DIR}" \
+    "${CODEX_ENV_FILE}" "${CODEX_ENV_FILE}" \
     "${NODE_INSTALL_DIR}/bin/codex"
   write_executable_file "${AGENT_BIN_DIR}/codex" "${codex_launcher}"
 
   printf -v ccr_launcher \
-    '#!/usr/bin/env bash\nexport HOME=%q CLAUDE_CONFIG_DIR=%q CODEX_HOME=%q\nexec %q "$@"' \
-    "${AGENT_HOME}" "${CLAUDE_CONFIG_DIR}" "${CODEX_DIR}" \
-    "${NODE_INSTALL_DIR}/bin/ccr"
+    '#!/usr/bin/env bash\nexport PATH=%q:%q:${PATH:-}\nexport HOME=%q CLAUDE_CONFIG_DIR=%q CODEX_HOME=%q\n[[ ! -f %q ]] || source %q\nexec %q "$@"' \
+    "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" "${AGENT_HOME}" \
+    "${CLAUDE_CONFIG_DIR}" "${CODEX_DIR}" \
+    "${CCR_RUNTIME_FILE}" "${CCR_RUNTIME_FILE}" "${NODE_INSTALL_DIR}/bin/ccr"
   write_executable_file "${AGENT_BIN_DIR}/ccr" "${ccr_launcher}"
+
+  printf -v ccr_autostart_launcher \
+    '#!/usr/bin/env bash\nset -Eeuo pipefail\n[[ -f %q ]] || { echo "Missing CCR runtime file: %q" >&2; exit 1; }\nsource %q\nccr_bin=%q\nservice_file=%q\nis_healthy() {\n  local pid\n  pid=$(sed -nE '\''s/.*"pid"[[:space:]]*:[[:space:]]*([0-9]+).*/\\1/p'\'' "${service_file}" 2>/dev/null | head -n 1)\n  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null && curl --fail --silent --max-time 2 "http://${CCR_HOST}:${CCR_MANAGEMENT_PORT}" >/dev/null 2>&1\n}\nif ! is_healthy; then\n  "${ccr_bin}" start --host "${CCR_HOST}" --port "${CCR_MANAGEMENT_PORT}" --no-open --gateway\nfi\nuntil is_healthy; do sleep 1; done\nwhile is_healthy; do sleep 5; done\necho "CCR stopped or became unhealthy" >&2\nexit 1' \
+    "${CCR_RUNTIME_FILE}" "${CCR_RUNTIME_FILE}" "${CCR_RUNTIME_FILE}" \
+    "${AGENT_BIN_DIR}/ccr" "${CCR_SERVICE_FILE}"
+  write_executable_file "${CCR_AUTOSTART_HELPER}" "${ccr_autostart_launcher}"
+}
+
+write_ccr_runtime_file() {
+  local runtime_content
+  runtime_content=$(printf '%s\n' \
+    "CCR_HOST=${CCR_HOST}" \
+    "CCR_GATEWAY_PORT=${CCR_GATEWAY_PORT}" \
+    "CCR_CORE_PORT=${CCR_CORE_PORT}" \
+    "CCR_MANAGEMENT_PORT=${CCR_MANAGEMENT_PORT}" \
+    "CCR_GATEWAY_URL=${CCR_GATEWAY_URL}" \
+    "case \":\${PATH:-}:\" in *:\"${AGENT_BIN_DIR}\":*) ;; *) PATH=${AGENT_BIN_DIR}:\${PATH:-} ;; esac" \
+    "case \":\${PATH:-}:\" in *:\"${NODE_INSTALL_DIR}/bin\":*) ;; *) PATH=${NODE_INSTALL_DIR}/bin:\${PATH:-} ;; esac" \
+    'export PATH CCR_HOST CCR_GATEWAY_PORT CCR_CORE_PORT CCR_MANAGEMENT_PORT CCR_GATEWAY_URL')
+  write_secure_file "${CCR_RUNTIME_FILE}" "${runtime_content}"
+  return 0
+}
+
+systemd_available() {
+  command_exists systemctl || return 1
+  [[ -d /run/systemd/system ]] ||
+    [[ "$(ps -p 1 -o comm= 2>/dev/null)" == systemd ]]
+}
+
+configure_ccr_autostart() {
+  local unit_file unit_user
+  if ! systemd_available; then
+    log 'systemd is unavailable; CCR auto-start is not installed (start ccr manually after boot).'
+    return 0
+  fi
+
+  unit_user=${SUDO_USER:-${USER:-$(id -un)}}
+  if ((EUID == 0)); then
+    unit_file="/etc/systemd/system/${CCR_SYSTEMD_UNIT}"
+    write_secure_file "${unit_file}" "[Unit]
+Description=AI Coding Setup Claude Code Router
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${unit_user}
+Environment=HOME=${AGENT_HOME}
+Environment=CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}
+Environment=CODEX_HOME=${CODEX_DIR}
+Environment=PATH=${AGENT_BIN_DIR}:${NODE_INSTALL_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=${CCR_AUTOSTART_HELPER}
+ExecStop=${AGENT_BIN_DIR}/ccr stop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target" 644
+    systemctl daemon-reload
+    if ! systemctl enable --now "${CCR_SYSTEMD_UNIT}"; then
+      log "WARNING: could not enable ${CCR_SYSTEMD_UNIT}; CCR configuration is complete, but auto-start needs manual repair."
+      return 0
+    fi
+    log "Installed and enabled systemd unit ${unit_file}"
+    return 0
+  fi
+
+  unit_file="${HOME}/.config/systemd/user/${CCR_SYSTEMD_UNIT}"
+  write_secure_file "${unit_file}" "[Unit]
+Description=AI Coding Setup Claude Code Router
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HOME=${AGENT_HOME}
+Environment=CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}
+Environment=CODEX_HOME=${CODEX_DIR}
+Environment=PATH=${AGENT_BIN_DIR}:${NODE_INSTALL_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=${CCR_AUTOSTART_HELPER}
+ExecStop=${AGENT_BIN_DIR}/ccr stop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target" 644
+  systemctl --user daemon-reload
+  if ! systemctl --user enable --now "${CCR_SYSTEMD_UNIT}"; then
+    log "WARNING: could not enable the user CCR unit; run systemctl --user enable --now ${CCR_SYSTEMD_UNIT} after login."
+    return 0
+  fi
+  log "Installed and enabled user systemd unit ${unit_file}"
 }
 
 configure_bash_startup() {
@@ -783,7 +882,7 @@ NODE
 
 select_ccr_ports() {
   local base
-  for ((base=3456; base<=65000; base+=3)); do
+  for ((base=CCR_PORT_SCAN_START; base<=65000; base+=3)); do
     if port_is_available "${base}" &&
        port_is_available "$((base + 1))" &&
        port_is_available "$((base + 2))"; then
@@ -1027,6 +1126,7 @@ configure_ccr() {
 
   local config_response local_key config volcano_fast_model volcano_pro_model
   prepare_ccr_management_service
+  write_ccr_runtime_file
   config_response=$(fetch_ccr_config)
   local_key=$(resolve_ccr_local_key "${config_response}")
   volcano_fast_model=$(select_profile_model "${VOLCANO_MODELS}" \
@@ -1053,6 +1153,7 @@ configure_ccr() {
   restart_ccr_gateway
   configure_claude_settings "${local_key}" "${CCR_GATEWAY_URL}" \
     "${volcano_fast_model}" "${volcano_pro_model}"
+  configure_ccr_autostart
 }
 
 build_claude_settings() {
