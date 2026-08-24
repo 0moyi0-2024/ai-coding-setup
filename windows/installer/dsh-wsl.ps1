@@ -85,8 +85,24 @@ function Assert-DshWslReady {
         $recordedDistro = (Get-Content -LiteralPath $global:DshDistroFile -Raw -ErrorAction Stop).Trim()
     }
 
-    $distroOutput = (& wsl.exe --list --quiet 2>&1 | Out-String) -replace "`0", ""
-    $listExitCode = $LASTEXITCODE
+    # 右键菜单打开事件运行在 WinForms UI 线程上；限制主机查询时间，避免
+    # WSL 服务卡住时整个托盘看起来“右键无反应”。
+    $listOutputPath = Join-Path $env:TEMP "dsh-wsl-list-$([guid]::NewGuid().ToString('N')).txt"
+    $listErrorPath = Join-Path $env:TEMP "dsh-wsl-list-error-$([guid]::NewGuid().ToString('N')).txt"
+    try {
+        $listProcess = Start-Process -FilePath "wsl.exe" -ArgumentList @('--list', '--quiet') `
+            -RedirectStandardOutput $listOutputPath -RedirectStandardError $listErrorPath `
+            -WindowStyle Hidden -PassThru
+        if (-not $listProcess.WaitForExit(5000)) {
+            try { $listProcess.Kill() } catch {}
+            throw "WSL 主机查询超过 5 秒，可能是 WSL 服务未响应。请确认 WSL 状态后重试。"
+        }
+        $listExitCode = $listProcess.ExitCode
+        $distroOutput = ((Get-Content -LiteralPath $listOutputPath -Raw -ErrorAction SilentlyContinue) + "`n" +
+            (Get-Content -LiteralPath $listErrorPath -Raw -ErrorAction SilentlyContinue)) -replace "`0", ""
+    } finally {
+        Remove-Item -LiteralPath $listOutputPath, $listErrorPath -Force -ErrorAction SilentlyContinue
+    }
     $distroText = $distroOutput.Trim()
     $noDistroMessage = $distroText -match '(?i)no installed distributions|no distributions|没有安装.*分发|未安装.*分发|找不到.*分发'
     $wslFeatureMessage = $distroText -match '(?i)virtual machine platform|虚拟机平台|enable the virtual machine|启用虚拟机|0x80370102|0x8007019e|需要.*重启'

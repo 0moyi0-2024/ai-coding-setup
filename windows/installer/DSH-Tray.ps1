@@ -16,11 +16,6 @@ try {
     Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
 } catch {}
 
-# ===== 加载模块 =====
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName Microsoft.VisualBasic
-
 # 获取脚本所在目录，兼容 PS2EXE 编译的 exe（$PSScriptRoot 可能为空）
 $modDir = if ($PSScriptRoot) {
     $PSScriptRoot
@@ -28,6 +23,13 @@ $modDir = if ($PSScriptRoot) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
     Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+}
+
+$installDir = if ((Split-Path -Leaf $modDir) -ieq 'source' -and
+    (Test-Path (Join-Path (Split-Path -Parent $modDir) 'DSH-一键安装.exe'))) {
+    Split-Path -Parent $modDir
+} else {
+    $modDir
 }
 
 $trayLogRoot = Join-Path ([Environment]::GetFolderPath("ApplicationData")) "DSH\logs"
@@ -47,12 +49,16 @@ function Show-TrayError {
     if ($script:notifyIcon) {
         try { $script:notifyIcon.ShowBalloonTip(4000, "$ActionName 失败", $Message, [System.Windows.Forms.ToolTipIcon]::Error) } catch {}
     }
-    [System.Windows.Forms.MessageBox]::Show(
-        $detail,
-        "DSH - $ActionName 失败",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Error
-    ) | Out-Null
+    try {
+        [System.Windows.Forms.MessageBox]::Show(
+            $detail,
+            "DSH - $ActionName 失败",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    } catch {
+        Write-TrayLog "无法显示错误对话框: $($_.Exception.Message)" "ERROR"
+    }
 }
 
 function Invoke-TrayAction {
@@ -68,6 +74,10 @@ function Invoke-TrayAction {
 
 try {
     Write-TrayLog "托盘进程启动，模块目录: $modDir"
+    # 在日志已准备好后加载 UI 依赖；NoConsole EXE 也能记录缺少 Desktop Runtime 等错误。
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction Stop
     . (Join-Path $modDir "powershell7-bootstrap.ps1")
     $restartScript = Join-Path $modDir "source\DSH-Tray.ps1"
     if (-not (Test-Path -LiteralPath $restartScript -PathType Leaf) -and $PSCommandPath -and [IO.Path]::GetExtension($PSCommandPath) -ieq '.ps1') {
@@ -87,10 +97,15 @@ try {
 
 # ===== 托盘图标 =====
 $ICON_FILE = Join-Path $modDir "icon.ico"
-$TRAY_ICON = if (Test-Path $ICON_FILE) {
-    New-Object System.Drawing.Icon($ICON_FILE)
-} else {
-    [System.Drawing.SystemIcons]::Application
+try {
+    $TRAY_ICON = if (Test-Path $ICON_FILE) {
+        New-Object System.Drawing.Icon($ICON_FILE)
+    } else {
+        [System.Drawing.SystemIcons]::Application
+    }
+} catch {
+    Write-TrayLog "托盘图标加载失败，使用系统图标: $($_.Exception.Message)" "WARN"
+    $TRAY_ICON = [System.Drawing.SystemIcons]::Application
 }
 
 # ===== 全局变量 =====
@@ -226,7 +241,7 @@ function Show-Terminal {
 }
 
 function Repair-DshInstallation {
-    $installer = Join-Path $modDir "DSH-一键安装.exe"
+    $installer = Join-Path $installDir "DSH-一键安装.exe"
     if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
         throw "找不到安装入口 $installer。请重新下载安装完整的 DSH 安装包。"
     }
