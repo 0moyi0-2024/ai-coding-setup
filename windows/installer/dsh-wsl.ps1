@@ -87,12 +87,24 @@ function Assert-DshWslReady {
 
     $distroOutput = (& wsl.exe --list --quiet 2>&1 | Out-String) -replace "`0", ""
     $listExitCode = $LASTEXITCODE
-    if ($listExitCode -ne 0) {
-        throw "WSL 当前不可用（退出码 $listExitCode）：$($distroOutput.Trim())。请先重启 Windows；若已重启，请重新运行「一键安装 DSH」。"
+    $distroText = $distroOutput.Trim()
+    $noDistroMessage = $distroText -match '(?i)no installed distributions|no distributions|没有安装.*分发|未安装.*分发|找不到.*分发'
+    $wslFeatureMessage = $distroText -match '(?i)virtual machine platform|虚拟机平台|enable the virtual machine|启用虚拟机|0x80370102|0x8007019e|需要.*重启'
+    if ($listExitCode -ne 0 -and -not $noDistroMessage) {
+        if ($wslFeatureMessage) {
+            throw "WSL Windows 功能尚未完全生效（退出码 $listExitCode）：$distroText。请重启 Windows 后再运行 DSH。"
+        }
+        throw "WSL 服务当前不可用（退出码 $listExitCode）：$distroText。请确认已重启 Windows，并在管理员终端运行 wsl --status。"
     }
-    $distros = @($distroOutput -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $distros = if ($noDistroMessage) {
+        @()
+    } else {
+        @($distroOutput -split "`r?`n" |
+            ForEach-Object { ($_.Trim() -replace '^\*\s*', '') } |
+            Where-Object { $_ -and $_ -notmatch '^(NAME|名称)\s' })
+    }
     if ($distros.Count -eq 0) {
-        throw "WSL 已启用，但没有安装 DSH 使用的 Ubuntu 发行版。请重新运行「一键安装 DSH」。"
+        throw "WSL 功能已启用，但尚未安装任何 Linux 发行版。请在右键菜单选择「继续安装 / 修复 DSH」，或重新运行「一键安装 DSH」。"
     }
 
     if ($recordedDistro) {
