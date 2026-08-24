@@ -124,6 +124,19 @@ $WSL_DISTRO     = "auto"                   # "auto" = 自动检测（覆盖 conf
 $WSL_USER       = "dsh"                    # WSL 内新建用户
 $NODE_VERSION   = "22"                     # Node.js LTS 主版本
 
+# 分步执行在新的 PowerShell 进程中运行；恢复 Part 1 写入的精确发行版名，
+# 避免 -Step 2/-Step 3 因日期后缀或默认发行版变化而找不到 DSH。
+if ($Step -in @("2", "3") -and $global:DshDistroFile -and
+    (Test-Path -LiteralPath $global:DshDistroFile -PathType Leaf)) {
+    $recordedDistro = (Get-Content -LiteralPath $global:DshDistroFile -Raw -ErrorAction Stop).Trim()
+    if ($recordedDistro) {
+        $script:WSL_DISTRO = $recordedDistro
+        $global:WSL_DISTRO = $recordedDistro
+        $WSL_DISTRO = $recordedDistro
+        Write-Host "  已恢复已安装的 WSL 发行版: $recordedDistro" -ForegroundColor Gray
+    }
+}
+
 # =============================================================================
 # 自动检测函数
 # =============================================================================
@@ -470,13 +483,25 @@ function Start-Part1-WSL {
     $targetName = "Ubuntu-${ubuntuVer}"
 
     # 检查是否已有同名发行版（精确匹配，避免子串误判）
-    $dshExists = (wsl -l -q 2>&1) -split "`n" | Where-Object { $_.Trim() -eq $dshName }
+    $allDistros = (wsl -l -q 2>&1) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    $dshExists = $allDistros | Where-Object { $_ -eq $dshName }
+    if (-not $dshExists -and $global:DshDistroFile -and
+        (Test-Path -LiteralPath $global:DshDistroFile -PathType Leaf)) {
+        $recordedDistro = (Get-Content -LiteralPath $global:DshDistroFile -Raw -ErrorAction SilentlyContinue).Trim()
+        if ($recordedDistro -and $allDistros -contains $recordedDistro) {
+            $recordedMarker = wsl -d $recordedDistro -- bash -c "id dsh >/dev/null 2>&1 && echo DSH-OWN" 2>&1
+            if ($recordedMarker -match "DSH-OWN") {
+                $dshName = $recordedDistro
+                $dshExists = $recordedDistro
+                Write-Host "  检测到已记录的 DSH 发行版 $recordedDistro，复用现有安装" -ForegroundColor Green
+            }
+        }
+    }
     $isNewInstall = $true
     if ($dshExists) {
         Write-Host "  $dshName 已存在，跳过" -ForegroundColor Green
         $isNewInstall = $false
     } else {
-        $allDistros = (wsl -l -q 2>&1) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
         $userHasTarget = $allDistros -contains $targetName
 
         # 检查 targetName 是否是我们之前安装的（含 dsh 用户标记）
@@ -616,10 +641,7 @@ function Start-Part1-WSL {
             if ($rootPlain.Length -lt 8 -or $rootPlain -cne $rootConfirmPlain) {
                 throw "root 密码至少需要 8 个字符，且两次输入必须一致。"
             }
-            $passwordResult = Invoke-WslSilent -Command "chpasswd" -User root -InputText "root:$rootPlain`n"
-            if ($passwordResult.Trim()) {
-                throw "设置 root 密码失败: $passwordResult"
-            }
+            Invoke-WslSilent -Command "chpasswd" -User root -InputText "root:$rootPlain`n" -ThrowOnError | Out-Null
         } finally {
             [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($rootBstr)
             [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($rootConfirmBstr)
@@ -634,27 +656,45 @@ function Start-Part1-WSL {
 
         # 创建无登录密码的 dsh 用户；日常服务不以 root 运行。
         Write-Host "  创建 dsh 用户（禁用密码登录）..."
-        @"
+$userSetup = @"
 #!/bin/bash
 set -e
-useradd -m -s /bin/bash dsh 2>/dev/null || true
-passwd -l dsh >/dev/null 2>&1 || true
-echo "[user]" > /etc/wsl.conf
-echo "default=dsh" >> /etc/wsl.conf
+if ! id dsh >/dev/null 2>&1; then
+    useradd -m -s /bin/bash dsh
+fi
+passwd -l dsh >/dev/null
+wsl_conf_tmp=`$(mktemp /etc/wsl.conf.XXXXXX)
+if [ -f /etc/wsl.conf ]; then
+    awk '
+        BEGIN { skipping = 0 }
+        /^\[[^]]+\][[:space:]]*$/ {
+            if (tolower(`$0) == "[user]") { skipping = 1; next }
+            skipping = 0
+        }
+        !skipping { print }
+    ' /etc/wsl.conf > "`$wsl_conf_tmp"
+fi
+printf '\n[user]\ndefault=dsh\n' >> "`$wsl_conf_tmp"
+mv -f "`$wsl_conf_tmp" /etc/wsl.conf
 echo USER-SETUP-OK
-"@ | wsl -d $dshName -u root -- bash 2>&1 | Out-Null
+"@
+        $userSetupResult = $userSetup | Invoke-WslSilent -User root -ThrowOnError
+        if ($userSetupResult -notmatch "USER-SETUP-OK") {
+            throw "dsh 用户配置未完成: $userSetupResult"
+        }
 
         # 重启 WSL 让 wsl.conf 的默认用户生效
         Write-Host "  重启 WSL 让默认用户生效..."
         wsl --terminate $dshName 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "重启 WSL 发行版失败: $dshName" }
         Start-Sleep -Seconds 2
 
-        $userCheck = wsl -d $dshName -- bash -c "id dsh 2>&1 && echo USER-OK"
-        if ($userCheck -match "USER-OK") {
-            Write-Host "  dsh 用户已创建（密码登录已锁定）" -ForegroundColor Green
-        } else {
-            Write-Host "  警告: dsh 用户配置可能不完整: $userCheck" -ForegroundColor Yellow
+        $userCheck = wsl -d $dshName -- whoami 2>&1
+        $userCheckText = ($userCheck | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $userCheckText -ne "dsh") {
+            throw "WSL 默认用户未切换为 dsh: $userCheckText"
         }
+        Write-Host "  dsh 用户已创建（密码登录已锁定）" -ForegroundColor Green
     }
 
     # 清理旧版本可能遗留的 dsh sudo 权限，并确保服务账户不可密码登录。
@@ -662,15 +702,16 @@ echo USER-SETUP-OK
 #!/bin/bash
 set -e
 if id dsh >/dev/null 2>&1; then
-    passwd -l dsh >/dev/null 2>&1 || true
+    passwd -l dsh >/dev/null
     gpasswd -d dsh sudo >/dev/null 2>&1 || true
 fi
 rm -f /etc/sudoers.d/dsh
 '@
-    $hardenDsh | Invoke-WslSilent -User root
+    $hardenDsh | Invoke-WslSilent -User root -ThrowOnError | Out-Null
 
     # 设为默认
     wsl --set-default $dshName 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "设置 WSL 默认发行版失败: $dshName" }
     $script:WSL_DISTRO = $dshName
     $global:WSL_DISTRO = $dshName
     $WSL_DISTRO = $dshName
@@ -740,12 +781,17 @@ function Start-Part2-DSH {
 
     # 2.1 安装 Node.js
     Write-Host "[2.1] 安装 Node.js v$NODE_VERSION..."
-$nodeInstall = @"
+    $nodeInstall = @"
 #!/bin/bash
 set -euo pipefail
+node_major=0
 if command -v node &>/dev/null; then
+    node_major=`$(node -p 'Number(process.versions.node.split(".")[0])')
+fi
+if (( node_major >= $NODE_VERSION )); then
     echo "  Node.js 已安装: `$(node -v)"
 else
+    if (( node_major > 0 )); then echo "  Node.js 版本过低（`$(node -v)），正在升级..."; fi
     echo "  正在安装 Node.js v$NODE_VERSION..."
     curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash 2>&1 | tail -1
     apt install -y -qq nodejs 2>&1 | tail -1
@@ -914,7 +960,8 @@ function Start-Part3-Config {
     if ($envLines.Count -gt 0) {
         $envContent = $envLines -join "`n"
         $envB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($envContent))
-        Invoke-WslSilent "echo '$envB64' | base64 -d > '$DSH_HOME/.env' && chmod 600 '$DSH_HOME/.env' && echo ENV-OK"
+        $envResult = Invoke-WslSilent "echo '$envB64' | base64 -d > '$DSH_HOME/.env' && chmod 600 '$DSH_HOME/.env' && echo ENV-OK" -ThrowOnError
+        if ($envResult -notmatch "ENV-OK") { throw "WSL .env 写入未完成: $envResult" }
         $envContent = $null
         $envB64 = $null
         $envLines = $null
@@ -1012,7 +1059,7 @@ mv -f "$tmp_file" "$BASHRC_FILE"
 echo "环境变量已幂等写入 ~/.bashrc"
 '@
     $setupEnv = $setupEnv.Replace('__DSH_HOME__', $DSH_HOME)
-    Invoke-WslSilent $setupEnv
+    Invoke-WslSilent $setupEnv -ThrowOnError | Out-Null
     Test-OK "DSH 环境变量已配置"
 
     # 3.3 创建 DSH 启动脚本
@@ -1044,7 +1091,8 @@ pnpm dsh $DSH_PROFILE --port $DSH_PORT
 "@
     # 通过 base64 写入文件，避免引号/换行问题
     $startB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($startScript))
-    Invoke-WslSilent "echo '$startB64' | base64 -d > ~/start-dsh.sh && chmod +x ~/start-dsh.sh && echo START-OK"
+    $startResult = Invoke-WslSilent "echo '$startB64' | base64 -d > ~/start-dsh.sh && chmod +x ~/start-dsh.sh && echo START-OK" -ThrowOnError
+    if ($startResult -notmatch "START-OK") { throw "启动脚本创建未完成: $startResult" }
     Test-OK "启动脚本已创建: ~/start-dsh.sh"
 
     # 3.4 配置 Windows 防火墙规则
@@ -1107,7 +1155,7 @@ echo "pnpm: `$(pnpm -v)"
 if [ -f .env ]; then echo "API Key: configured"; else echo "API Key: NOT configured"; fi
 if [ -x node_modules/.bin/dsh ]; then echo "DSH executable: yes"; else echo "DSH executable: no"; fi
 "@
-    $verifyOutput = Invoke-WslSilent "cd $DSH_HOME; $verifyConfig"
+    $verifyOutput = Invoke-WslSilent "cd $DSH_HOME; $verifyConfig" -ThrowOnError
     Write-Host ""
     Write-Host "  配置摘要:"
     $verifyOutput -split "`n" | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
@@ -1115,7 +1163,7 @@ if [ -x node_modules/.bin/dsh ]; then echo "DSH executable: yes"; else echo "DSH
     # 验证完成后清理临时 .env（明文不残留，后续由托盘管理器动态管理）
     Write-Host ""
     Write-Host "  清理临时 .env 文件..."
-    Invoke-WslSilent "rm -f '$DSH_HOME/.env' 2>/dev/null && echo CLEANED" | Out-Null
+    Invoke-WslSilent "rm -f '$DSH_HOME/.env' 2>/dev/null && echo CLEANED" -ThrowOnError | Out-Null
     Write-Host "  ✅ .env 已清理（Token 已加密保存在 Windows，托盘启动时自动解密）" -ForegroundColor Green
 
     Write-Host ""

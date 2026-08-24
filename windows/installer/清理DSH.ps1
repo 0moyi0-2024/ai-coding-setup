@@ -72,10 +72,14 @@ Write-Host ""
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     Write-Host "⚠️  需要管理员权限才能清理，正在重新启动..." -ForegroundColor Yellow
+    $elevatedArguments = @()
+    if ($Force) { $elevatedArguments += '-Force' }
+    if ($Distro) { $elevatedArguments += @('-Distro', $Distro) }
     if ($IsCompiledExecutable) {
-        Start-Process -FilePath $SelfPath -ArgumentList "-Force" -Verb RunAs
+        Start-Process -FilePath $SelfPath -ArgumentList $elevatedArguments -Verb RunAs
     } else {
-        Start-Process -FilePath (Join-Path $PSHOME "pwsh.exe") -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$SelfPath`"" -Verb RunAs
+        $scriptArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SelfPath) + $elevatedArguments
+        Start-Process -FilePath (Join-Path $PSHOME "pwsh.exe") -ArgumentList $scriptArguments -Verb RunAs
     }
     exit
 }

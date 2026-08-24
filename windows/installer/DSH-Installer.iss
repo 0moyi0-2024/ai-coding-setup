@@ -88,13 +88,15 @@ Name: "{group}\查看说明"; Filename: "{app}\uninstall-notes.txt"
 Name: "{group}\卸载 DSH"; Filename: "{uninstallexe}"
 
 ; 桌面快捷方式（托盘管理器）
-Name: "{commondesktop}\DeepSeek Harness (DSH)"; Filename: "{app}\DSH-Tray.exe"; WorkingDir: "{app}"; Comment: "DSH 托盘管理器 - 右键启动/停止"; Tasks: desktopicon
+Name: "{userdesktop}\DeepSeek Harness (DSH)"; Filename: "{app}\DSH-Tray.exe"; WorkingDir: "{app}"; Comment: "DSH 托盘管理器 - 右键启动/停止"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式选项："; Flags: checkedonce
 
 [Run]
 ; 安装完成后询问是否立即运行
+; 先以当前交互用户启动，DSH-一键安装.exe 自身再按需请求 UAC，避免安装器身份
+; 把 PowerShell 7/WSL 初始化绑定到错误的管理员用户配置文件。
 Filename: "{app}\{#MyAppExeName}"; Description: "立即开始安装 DSH"; Flags: postinstall nowait skipifsilent shellexec runascurrentuser
 
 [UninstallRun]
