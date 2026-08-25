@@ -249,6 +249,17 @@ function Repair-DshInstallation {
     Start-Process -FilePath $installer | Out-Null
 }
 
+function Reset-WslFromTray {
+    Reset-DshWslSession | Out-Null
+    $script:lastReadinessCheck = [datetime]::MinValue
+    if (Update-DshReadiness) {
+        $script:notifyIcon.ShowBalloonTip(2000, "DSH", "WSL 会话已重置，检查通过", [System.Windows.Forms.ToolTipIcon]::Info)
+    } else {
+        throw "WSL 会话已重置，但发行版仍未就绪。请查看托盘日志。"
+    }
+    Update-Menu
+}
+
 function Update-DshReadiness {
     # Opening the context menu can happen repeatedly; avoid launching another WSL
     # probe while the previous result is still fresh.
@@ -386,6 +397,10 @@ function Update-Menu {
     $script:contextMenu.Items.Add("-")
 
     if (-not $script:wslReady) {
+        $resetItem = New-Object System.Windows.Forms.ToolStripMenuItem
+        $resetItem.Text = "🔄 重置 WSL 会话并重试"
+        $resetItem.Add_Click({ Invoke-TrayAction "重置 WSL 会话" { Reset-WslFromTray } })
+        $script:contextMenu.Items.Add($resetItem)
         $repairItem = New-Object System.Windows.Forms.ToolStripMenuItem
         $repairItem.Text = "🔧 继续安装 / 修复 DSH"
         $repairItem.Add_Click({ Invoke-TrayAction "继续安装 / 修复 DSH" { Repair-DshInstallation } })

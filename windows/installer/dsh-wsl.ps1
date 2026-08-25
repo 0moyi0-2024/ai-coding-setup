@@ -74,6 +74,33 @@ function Invoke-WslVisible {
     return [System.Diagnostics.Process]::Start($psi)
 }
 
+function Get-DshWslServiceSummary {
+    $names = @('WslService', 'LxssManager')
+    $states = foreach ($name in $names) {
+        try {
+            $service = Get-Service -Name $name -ErrorAction Stop
+            "$name=$($service.Status)/$($service.StartType)"
+        } catch {
+            "$name=NotFound"
+        }
+    }
+    return ($states -join ', ')
+}
+
+function Reset-DshWslSession {
+    $process = Start-Process -FilePath "wsl.exe" -ArgumentList @('--shutdown') `
+        -WindowStyle Hidden -PassThru
+    if (-not $process.WaitForExit(10000)) {
+        try { $process.Kill() } catch {}
+        throw "wsl --shutdown 也未在 10 秒内完成。WSL 服务状态: $(Get-DshWslServiceSummary)"
+    }
+    if ($process.ExitCode -ne 0) {
+        throw "wsl --shutdown 失败（退出码 $($process.ExitCode)）。WSL 服务状态: $(Get-DshWslServiceSummary)"
+    }
+    Start-Sleep -Seconds 2
+    return $true
+}
+
 function Assert-DshWslReady {
     <# 验证托盘实际使用的 DSH 发行版，失败时给出可执行的修复提示。 #>
     if (-not (Get-Command "wsl.exe" -ErrorAction SilentlyContinue)) {
@@ -92,7 +119,17 @@ function Assert-DshWslReady {
         try {
             $distroCheck = Invoke-WslHidden "echo DSH-DISTRO-OK" 15000 -ThrowOnError
         } catch {
-            throw "DSH 记录的 WSL 发行版「$recordedDistro」当前不可用：$($_.Exception.Message)"
+            $firstError = $_.Exception.Message
+            if ($firstError -match '超时|TIMEOUT') {
+                try {
+                    Reset-DshWslSession | Out-Null
+                    $distroCheck = Invoke-WslHidden "echo DSH-DISTRO-OK" 30000 -ThrowOnError
+                } catch {
+                    throw "DSH 记录的 WSL 发行版「$recordedDistro」当前不可用。已自动执行一次 wsl --shutdown 并重试仍失败。`n$($_.Exception.Message)`nWSL 服务状态: $(Get-DshWslServiceSummary)"
+                }
+            } else {
+                throw "DSH 记录的 WSL 发行版「$recordedDistro」当前不可用：$firstError`nWSL 服务状态: $(Get-DshWslServiceSummary)"
+            }
         }
         if ($distroCheck -notmatch 'DSH-DISTRO-OK') {
             throw "DSH 记录的 WSL 发行版「$recordedDistro」未返回正常响应。请先执行 wsl --shutdown 后重试。"
@@ -114,7 +151,12 @@ function Assert-DshWslReady {
             -WindowStyle Hidden -PassThru
         if (-not $listProcess.WaitForExit(15000)) {
             try { $listProcess.Kill() } catch {}
-            throw "WSL 主机查询超过 15 秒，可能是 WSL 服务未响应。请先执行 wsl --shutdown 后重试。"
+            try {
+                Reset-DshWslSession | Out-Null
+            } catch {
+                throw "WSL 主机查询超过 15 秒，且自动重置失败：$($_.Exception.Message)"
+            }
+            throw "WSL 主机查询超过 15 秒。已自动执行 wsl --shutdown，请重新打开托盘重试。WSL 服务状态: $(Get-DshWslServiceSummary)"
         }
         $listExitCode = $listProcess.ExitCode
         $distroOutput = ((Get-Content -LiteralPath $listOutputPath -Raw -ErrorAction SilentlyContinue) + "`n" +
