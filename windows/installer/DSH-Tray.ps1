@@ -312,6 +312,16 @@ function Update-Menu {
     }
     $statusItem.Enabled = $false
     $script:contextMenu.Items.Add($statusItem)
+    $refreshItem = New-Object System.Windows.Forms.ToolStripMenuItem
+    $refreshItem.Text = "🔄 刷新 WSL 状态"
+    $refreshItem.Add_Click({
+        Invoke-TrayAction "刷新 WSL 状态" {
+            $script:lastReadinessCheck = [datetime]::MinValue
+            Update-DshReadiness | Out-Null
+            Update-Menu
+        }
+    })
+    $script:contextMenu.Items.Add($refreshItem)
     $script:contextMenu.Items.Add("-")
 
     # 启动/停止
@@ -436,12 +446,10 @@ function Show-Tray {
     Update-Menu
     $script:notifyIcon.ContextMenuStrip = $script:contextMenu
     $script:contextMenu.Add_Opening({
-        try {
-            Update-DshReadiness | Out-Null
-            Update-Menu
-        } catch {
-            Show-TrayError "刷新右键菜单" $_.Exception.Message
-        }
+        # 不在 Opening 事件中调用 WSL：该事件运行在 WinForms UI 线程上，
+        # WSL 冷启动或服务卡住会让右键菜单完全无法显示。状态通过显式
+        # “刷新 WSL 状态”菜单项更新，启动/打开操作仍会执行最终就绪检查。
+        Update-Menu
     })
 
     $script:notifyIcon.Add_DoubleClick({
