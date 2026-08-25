@@ -85,17 +85,36 @@ function Assert-DshWslReady {
         $recordedDistro = (Get-Content -LiteralPath $global:DshDistroFile -Raw -ErrorAction Stop).Trim()
     }
 
+    # 安装器会保存精确的发行版名称。正常安装后直接探测该发行版，避免每次
+    # 右键都调用全局 --list；WSL 冷启动时全局列表可能需要十几秒才返回。
+    if ($recordedDistro) {
+        $global:WSL_DISTRO = $recordedDistro
+        try {
+            $distroCheck = Invoke-WslHidden "echo DSH-DISTRO-OK" 15000 -ThrowOnError
+        } catch {
+            throw "DSH 记录的 WSL 发行版「$recordedDistro」当前不可用：$($_.Exception.Message)"
+        }
+        if ($distroCheck -notmatch 'DSH-DISTRO-OK') {
+            throw "DSH 记录的 WSL 发行版「$recordedDistro」未返回正常响应。请先执行 wsl --shutdown 后重试。"
+        }
+        $homeCheck = Invoke-WslHidden "test -d '$global:DSH_HOME' && echo DSH-READY" 15000 -ThrowOnError
+        if ($homeCheck -notmatch "DSH-READY") {
+            throw "WSL 可用，但 $recordedDistro 中没有找到 DSH 安装目录 $global:DSH_HOME。请重新运行「一键安装 DSH」。"
+        }
+        return $true
+    }
+
     # 右键菜单打开事件运行在 WinForms UI 线程上；限制主机查询时间，避免
-    # WSL 服务卡住时整个托盘看起来“右键无反应”。
+    # 没有安装记录时 WSL 服务卡住导致整个托盘看起来“右键无反应”。
     $listOutputPath = Join-Path $env:TEMP "dsh-wsl-list-$([guid]::NewGuid().ToString('N')).txt"
     $listErrorPath = Join-Path $env:TEMP "dsh-wsl-list-error-$([guid]::NewGuid().ToString('N')).txt"
     try {
         $listProcess = Start-Process -FilePath "wsl.exe" -ArgumentList @('--list', '--quiet') `
             -RedirectStandardOutput $listOutputPath -RedirectStandardError $listErrorPath `
             -WindowStyle Hidden -PassThru
-        if (-not $listProcess.WaitForExit(5000)) {
+        if (-not $listProcess.WaitForExit(15000)) {
             try { $listProcess.Kill() } catch {}
-            throw "WSL 主机查询超过 5 秒，可能是 WSL 服务未响应。请确认 WSL 状态后重试。"
+            throw "WSL 主机查询超过 15 秒，可能是 WSL 服务未响应。请先执行 wsl --shutdown 后重试。"
         }
         $listExitCode = $listProcess.ExitCode
         $distroOutput = ((Get-Content -LiteralPath $listOutputPath -Raw -ErrorAction SilentlyContinue) + "`n" +
@@ -130,7 +149,7 @@ function Assert-DshWslReady {
         $global:WSL_DISTRO = $recordedDistro
     }
 
-    $homeCheck = Invoke-WslHidden "test -d '$global:DSH_HOME' && echo DSH-READY" 10000 -ThrowOnError
+    $homeCheck = Invoke-WslHidden "test -d '$global:DSH_HOME' && echo DSH-READY" 15000 -ThrowOnError
     if ($homeCheck -notmatch "DSH-READY") {
         $distroLabel = if ($global:WSL_DISTRO) { $global:WSL_DISTRO } else { "默认发行版" }
         throw "WSL 可用，但 $distroLabel 中没有找到 DSH 安装目录 $global:DSH_HOME。请重新运行「一键安装 DSH」。"

@@ -114,6 +114,7 @@ $script:contextMenu = $null
 $script:terminalProcess = $null
 $script:lastBrowserState = $false
 $script:wslReady = $false
+$script:lastReadinessCheck = [datetime]::MinValue
 
 # ===== Token 配置（UI 层）=====
 function Get-TokenStatus {
@@ -249,6 +250,11 @@ function Repair-DshInstallation {
 }
 
 function Update-DshReadiness {
+    # Opening the context menu can happen repeatedly; avoid launching another WSL
+    # probe while the previous result is still fresh.
+    if ($script:lastReadinessCheck -gt (Get-Date).AddSeconds(-10)) {
+        return $script:wslReady
+    }
     try {
         Assert-DshWslReady | Out-Null
         $script:wslReady = $true
@@ -259,6 +265,8 @@ function Update-DshReadiness {
         $script:IsRunning = $false
         Write-TrayLog "WSL 与 DSH 尚未就绪: $($_.Exception.Message)" "WARN"
         return $false
+    } finally {
+        $script:lastReadinessCheck = Get-Date
     }
 }
 
