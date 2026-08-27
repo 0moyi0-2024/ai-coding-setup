@@ -107,6 +107,22 @@ function Assert-DshWslReady {
         throw "未找到 wsl.exe。请重新运行「一键安装 DSH」并完成 WSL 安装。"
     }
 
+    $serviceNames = @('WslService', 'LxssManager')
+    $serviceFound = $false
+    foreach ($serviceName in $serviceNames) {
+        if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+            $serviceFound = $true
+            break
+        }
+    }
+    if (-not $serviceFound) {
+        $versionOutput = ''
+        try {
+            $versionOutput = (& wsl.exe --version 2>&1 | Out-String).Trim()
+        } catch {}
+        throw "WSL 应用本体未安装或未注册（WslService/LxssManager 均不存在）。请重新运行「一键安装 DSH」以自动安装 Microsoft.WSL。输出: $versionOutput"
+    }
+
     $recordedDistro = ""
     if ($global:DshDistroFile -and (Test-Path -LiteralPath $global:DshDistroFile -PathType Leaf)) {
         $recordedDistro = (Get-Content -LiteralPath $global:DshDistroFile -Raw -ErrorAction Stop).Trim()

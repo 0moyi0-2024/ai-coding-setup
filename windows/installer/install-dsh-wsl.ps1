@@ -314,6 +314,83 @@ function Invoke-WslHostLogged {
     return [pscustomobject]@{ ExitCode = $exitCode; Output = $output }
 }
 
+function Get-DshWslServiceSummary {
+    $names = @('WslService', 'LxssManager')
+    $states = foreach ($name in $names) {
+        try {
+            $service = Get-Service -Name $name -ErrorAction Stop
+            "$name=$($service.Status)/$($service.StartType)"
+        } catch {
+            "$name=NotFound"
+        }
+    }
+    return ($states -join ', ')
+}
+
+function Test-DshWslApplication {
+    if (-not (Get-Command 'wsl.exe' -ErrorAction SilentlyContinue)) { return $false }
+    foreach ($name in @('WslService', 'LxssManager')) {
+        if (Get-Service -Name $name -ErrorAction SilentlyContinue) { return $true }
+    }
+    try {
+        $versionOutput = (& wsl.exe --version 2>&1 | Out-String).Trim()
+        return ($LASTEXITCODE -eq 0 -and $versionOutput -match '(?i)WSL version|版本')
+    } catch {
+        return $false
+    }
+}
+
+function Ensure-DshWslApplication {
+    if (Test-DshWslApplication) {
+        Write-Host "  WSL 应用本体已安装 ($((Get-DshWslServiceSummary)))" -ForegroundColor Green
+        return
+    }
+
+    Write-Host "  Windows WSL 功能已启用，但 WSL 应用本体未安装。" -ForegroundColor Yellow
+    $installOutput = ''
+    $installExitCode = -1
+    $wingetSucceeded = $false
+    $winget = Get-Command 'winget.exe' -ErrorAction SilentlyContinue
+    if ($winget) {
+        Write-Host "  正在通过 winget 安装 Microsoft.WSL..."
+        try {
+            $installOutput = (& $winget.Source install --id Microsoft.WSL --exact --source winget --scope machine --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-String).Trim()
+            $installExitCode = $LASTEXITCODE
+            $wingetSucceeded = $installExitCode -in @(0, 3010)
+            Add-Content -Path $LogFile -Value "[winget Microsoft.WSL] exit code: $installExitCode`n$installOutput"
+        } catch {
+            $installOutput = $_.Exception.Message
+        }
+    }
+
+    # winget 成功后服务可能要等重启才注册；此时不要立刻再调用旧版
+    # wsl.exe --install，避免把“待重启”误报成安装失败。
+    if (-not (Test-DshWslApplication) -and -not $wingetSucceeded) {
+        if (-not (Get-Command 'wsl.exe' -ErrorAction SilentlyContinue)) {
+            throw "无法安装 WSL 应用本体：未找到 winget 或 wsl.exe。请从 Microsoft Store 安装 Windows Subsystem for Linux。"
+        }
+        Write-Host "  winget 未完成安装，尝试 wsl --install --no-distribution..." -ForegroundColor Yellow
+        $wslInstallOutput = (& wsl.exe --install --no-distribution 2>&1 | Out-String).Trim()
+        $wslInstallExitCode = $LASTEXITCODE
+        Add-Content -Path $LogFile -Value "[wsl --install --no-distribution] exit code: $wslInstallExitCode`n$wslInstallOutput"
+        $installOutput = "$installOutput`n$wslInstallOutput".Trim()
+        if ($wslInstallExitCode -notin @(0, 3010)) {
+            throw "安装 WSL 应用本体失败（退出码 $wslInstallExitCode）。输出: $installOutput"
+        }
+    }
+
+    if (-not (Test-DshWslApplication)) {
+        Write-Host "  WSL 应用已安装或正在等待系统重启。" -ForegroundColor Yellow
+        Write-Host "  请重启 Windows 后重新运行 DSH 安装程序。" -ForegroundColor Yellow
+        $restartNow = Read-Host "  是否现在重启？(Y/n)"
+        if ($restartNow -ne 'n' -and $restartNow -ne 'N') {
+            Restart-Computer -Force
+        }
+        throw "WSL 应用本体尚未生效，必须先重启 Windows。服务状态: $(Get-DshWslServiceSummary)"
+    }
+    Write-Host "  WSL 应用本体安装完成 ($((Get-DshWslServiceSummary)))" -ForegroundColor Green
+}
+
 function Test-DshNetworkPrerequisites {
     Write-Host "[2.0] 检查安装所需网络..."
     $networkCheck = @'
@@ -367,6 +444,13 @@ function Start-Part1-WSL {
         throw "WSL 安装必须在管理员权限下运行。"
     }
     Write-Host "[1.1] 管理员权限 ✅" -ForegroundColor Green
+
+    # 先确保 WSL 应用本体存在，再调用 --list/--install 选择发行版；仅启用
+    # Windows 可选功能并不会提供新版 WSL 应用和对应服务。
+    $initialWslCommand = Get-Command "wsl.exe" -ErrorAction SilentlyContinue
+    if ($initialWslCommand) {
+        Ensure-DshWslApplication
+    }
 
     # 1.2 自动检测 Windows 版本并选择适配的发行版
     Write-Host "[1.2] 自动检测 Windows 版本和适配的 WSL 发行版..."
@@ -459,8 +543,10 @@ function Start-Part1-WSL {
         }
     }
 
+    Ensure-DshWslApplication
+    $wslCommandPresent = $null -ne (Get-Command "wsl.exe" -ErrorAction SilentlyContinue)
     if (-not $wslCommandPresent) {
-        throw "Windows 功能已启用，但找不到 wsl.exe。请安装最新 Windows 更新后重试。详细日志: $LogFile"
+        throw "WSL 应用本体安装后仍找不到 wsl.exe。请安装最新 Windows 更新后重试。详细日志: $LogFile"
     }
 
     # 1.5 设置 WSL 2 为默认版本
