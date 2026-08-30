@@ -27,8 +27,11 @@ function Invoke-WslHidden {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
-    $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+    # Keep native WSL output BOM-free as well; otherwise the first marker or
+    # diagnostic can contain an invisible U+FEFF character.
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $psi.StandardOutputEncoding = $utf8NoBom
+    $psi.StandardErrorEncoding = $utf8NoBom
     $psi.Environment["WSL_UTF8"] = "1"
 
     try {

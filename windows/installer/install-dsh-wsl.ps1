@@ -256,14 +256,19 @@ function Invoke-WslSilent {
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $psi.RedirectStandardInput = $true
-        $psi.StandardInputEncoding = [Text.Encoding]::UTF8
-        $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
-        $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+        # [Text.Encoding]::UTF8 may emit a UTF-8 preamble when used by the
+        # Process standard-input writer.  chpasswd treats that invisible BOM
+        # as part of the username ("﻿root"), causing PAM authentication to
+        # fail.  Always use an explicit BOM-free UTF-8 encoding for WSL pipes.
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        $psi.StandardInputEncoding = $utf8NoBom
+        $psi.StandardOutputEncoding = $utf8NoBom
+        $psi.StandardErrorEncoding = $utf8NoBom
         $psi.Environment["WSL_UTF8"] = "1"
 
         $p = [System.Diagnostics.Process]::Start($psi)
         if ($InputText -ne "") {
-            $p.StandardInput.Write($InputText)
+            $p.StandardInput.Write($InputText.TrimStart([char]0xFEFF))
         }
         $p.StandardInput.Close()
         $outTask = $p.StandardOutput.ReadToEndAsync()
