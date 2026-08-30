@@ -28,6 +28,9 @@ param(
     [string]$Step = "all"
 )
 
+# 新建 DSH WSL 发行版时使用的兼容默认密码。安装完成后请立即修改。
+$script:DshDefaultRootPassword = "123456"
+
 # PS2EXE 生成的 EXE 仍需加载安装目录中的模块。尝试放宽当前进程，
 # 但不要求最终有效策略必须显示为 Bypass：MachinePolicy/UserPolicy 可能
 # 覆盖该显示值，RemoteSigned 下本地安装文件仍然可以正常加载。
@@ -726,27 +729,15 @@ function Start-Part1-WSL {
         }
 
         if ($isNewInstall) {
-        # 由用户设置 WSL root 密码；密码只通过标准输入传递，不写入命令行、日志或文件。
-        Write-Host "  设置 WSL root 密码..."
-        $rootPassword = Read-Host "请输入 WSL root 密码（不会显示，至少 8 个字符）" -AsSecureString
-        $rootPasswordConfirm = Read-Host "请再次输入 WSL root 密码" -AsSecureString
-        $rootBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($rootPassword)
-        $rootConfirmBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($rootPasswordConfirm)
-        try {
-            $rootPlain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($rootBstr)
-            $rootConfirmPlain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($rootConfirmBstr)
-            if ($rootPlain.Length -lt 8 -or $rootPlain -cne $rootConfirmPlain) {
-                throw "root 密码至少需要 8 个字符，且两次输入必须一致。"
+            # 密码只通过无 BOM 的标准输入传递，不写入命令行、日志或配置文件。
+            # 默认密码仅用于完成无人值守安装，安装完成后应立即由用户自行修改。
+            Write-Host "  设置 WSL root 默认密码..."
+            $rootPlain = $script:DshDefaultRootPassword
+            try {
+                Invoke-WslSilent -Command "chpasswd" -User root -InputText "root:$rootPlain`n" -ThrowOnError | Out-Null
+            } finally {
+                $rootPlain = $null
             }
-            Invoke-WslSilent -Command "chpasswd" -User root -InputText "root:$rootPlain`n" -ThrowOnError | Out-Null
-        } finally {
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($rootBstr)
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($rootConfirmBstr)
-            $rootPlain = $null
-            $rootConfirmPlain = $null
-            $rootPassword = $null
-            $rootPasswordConfirm = $null
-        }
         } else {
             Write-Host "  已有 DSH WSL 发行版，保留现有 root 密码。"
         }
