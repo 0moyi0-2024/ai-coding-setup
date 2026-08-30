@@ -150,7 +150,11 @@ function Assert-DshWslReady {
         if ($distroCheck -notmatch 'DSH-DISTRO-OK') {
             throw "DSH 记录的 WSL 发行版「$recordedDistro」未返回正常响应。请先执行 wsl --shutdown 后重试。"
         }
-        $homeCheck = Invoke-WslHidden "test -d '$global:DSH_HOME' && echo DSH-READY" 15000 -ThrowOnError
+        # A missing DSH directory is an installation-state result, not a WSL
+        # execution failure.  Always emit a marker with exit code 0 so the
+        # caller can show the actionable repair message below instead of an
+        # empty "exit code 1" error from `test -d`.
+        $homeCheck = Invoke-WslHidden "if test -d '$global:DSH_HOME'; then echo DSH-READY; else echo DSH-MISSING; fi" 15000 -ThrowOnError
         if ($homeCheck -notmatch "DSH-READY") {
             throw "WSL 可用，但 $recordedDistro 中没有找到 DSH 安装目录 $global:DSH_HOME。请重新运行「一键安装 DSH」。"
         }
@@ -207,7 +211,7 @@ function Assert-DshWslReady {
         $global:WSL_DISTRO = $recordedDistro
     }
 
-    $homeCheck = Invoke-WslHidden "test -d '$global:DSH_HOME' && echo DSH-READY" 15000 -ThrowOnError
+    $homeCheck = Invoke-WslHidden "if test -d '$global:DSH_HOME'; then echo DSH-READY; else echo DSH-MISSING; fi" 15000 -ThrowOnError
     if ($homeCheck -notmatch "DSH-READY") {
         $distroLabel = if ($global:WSL_DISTRO) { $global:WSL_DISTRO } else { "默认发行版" }
         throw "WSL 可用，但 $distroLabel 中没有找到 DSH 安装目录 $global:DSH_HOME。请重新运行「一键安装 DSH」。"
