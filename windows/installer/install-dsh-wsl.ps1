@@ -268,7 +268,13 @@ function Invoke-WslSilent {
 
         $p = [System.Diagnostics.Process]::Start($psi)
         if ($InputText -ne "") {
-            $p.StandardInput.Write($InputText.TrimStart([char]0xFEFF))
+            # Write raw UTF-8 bytes instead of StreamWriter text.  This makes
+            # the no-BOM guarantee independent of the runtime's handling of
+            # StandardInputEncoding and prevents chpasswd from seeing
+            # U+FEFF as part of the `root` username.
+            $inputBytes = $utf8NoBom.GetBytes($InputText.TrimStart([char]0xFEFF))
+            $p.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
+            $p.StandardInput.BaseStream.Flush()
         }
         $p.StandardInput.Close()
         $outTask = $p.StandardOutput.ReadToEndAsync()
