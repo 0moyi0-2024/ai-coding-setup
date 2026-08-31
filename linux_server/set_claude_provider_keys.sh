@@ -444,7 +444,7 @@ ensure_node_runtime_dependencies() {
         apt-get update
         apt-get install -y libatomic1
       elif command_exists dnf; then
-        dnf install -y libatomic
+        install_libatomic_with_dnf dnf
       elif command_exists yum; then
         yum install -y libatomic
       else
@@ -454,6 +454,26 @@ ensure_node_runtime_dependencies() {
   fi
   "${node_binary}" --version >/dev/null 2>&1 ||
     die "Node.js cannot start. Check shared-library dependencies with: ldd ${node_binary}"
+}
+
+install_libatomic_with_dnf() {
+  local dnf_bin=$1
+  local disabled_repos=${AI_SETUP_DNF_DISABLE_REPO:-'*update*'}
+
+  # A stale mirror or proxy can serve a repomd.xml whose checksum does not
+  # match its metadata. Retry after discarding cached metadata before using a
+  # narrow repository fallback; this keeps normal repository selection intact.
+  if "${dnf_bin}" install -y libatomic; then
+    return 0
+  fi
+  log "dnf metadata download failed; clearing cached metadata and retrying"
+  "${dnf_bin}" clean all >/dev/null 2>&1 || true
+  if "${dnf_bin}" --refresh install -y libatomic; then
+    return 0
+  fi
+
+  log "dnf update repository is unavailable; retrying with --disablerepo=${disabled_repos}"
+  "${dnf_bin}" --refresh --disablerepo="${disabled_repos}" install -y libatomic
 }
 
 install_node_runtime() {

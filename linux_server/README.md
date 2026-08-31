@@ -95,7 +95,14 @@ sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh --configure-only
 - 需要替换 key：输入新 key 后按 Enter。
 
 安装过程可能需要访问 Node.js、npm 和相应模型网关。缺少 `libatomic.so.1` 时，
-脚本可能通过容器的 apt、dnf 或 yum 安装这个系统依赖。
+脚本可能通过容器的 apt、dnf 或 yum 安装这个系统依赖。对于 `dnf`，如果镜像或
+代理返回的仓库元数据校验失败，脚本会清理缓存并强制刷新后重试，最后才临时禁用
+名称中包含 `update` 的仓库。如果该环境使用了不同的更新仓库名称，可以设置
+`AI_SETUP_DNF_DISABLE_REPO`（支持 dnf 的仓库 glob 或逗号分隔值）后重新运行，例如：
+
+```bash
+AI_SETUP_DNF_DISABLE_REPO='updates,update' bash ./set_claude_provider_keys.sh
+```
 
 ## 修改或上库前运行开发测试
 

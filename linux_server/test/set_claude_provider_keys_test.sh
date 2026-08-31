@@ -804,6 +804,31 @@ OLD_NODE
   pass "Node.js version guard"
 }
 
+test_dnf_metadata_recovery() {
+  local fake_dnf="${TEST_ROOT}/fake-dnf"
+  local dnf_log="${TEST_ROOT}/dnf-args"
+  cat >"${fake_dnf}" <<'FAKE_DNF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${DNF_TEST_LOG}"
+case "$*" in
+  *'clean all'*) exit 0 ;;
+  *"--disablerepo=${AI_SETUP_DNF_DISABLE_REPO}"*) exit 0 ;;
+  *) exit 1 ;;
+esac
+FAKE_DNF
+  chmod 700 "${fake_dnf}"
+  export DNF_TEST_LOG="${dnf_log}" AI_SETUP_DNF_DISABLE_REPO='broken-update'
+  install_libatomic_with_dnf "${fake_dnf}"
+  grep -Fqx 'install -y libatomic' "${dnf_log}" || fail "dnf initial install attempt"
+  grep -Fqx 'clean all' "${dnf_log}" || fail "dnf metadata cleanup"
+  grep -Fqx -- '--refresh install -y libatomic' "${dnf_log}" ||
+    fail "dnf refreshed install attempt"
+  grep -Fqx -- '--refresh --disablerepo=broken-update install -y libatomic' "${dnf_log}" ||
+    fail "dnf disabled-repository fallback"
+  unset DNF_TEST_LOG AI_SETUP_DNF_DISABLE_REPO
+  pass "dnf metadata recovery"
+}
+
 test_cli_install_command() {
   local npm_args node_args claude_package
   local fake_npm="${NODE_INSTALL_DIR}/bin/npm"
@@ -936,6 +961,7 @@ test_agent_path_validation
 test_argument_parsing
 test_dry_run_is_non_destructive
 test_node_version_guard
+test_dnf_metadata_recovery
 test_cli_install_command
 test_better_sqlite_rebuild
 test_ccr_connection_helpers
