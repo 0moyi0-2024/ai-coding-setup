@@ -556,6 +556,20 @@ ccr_package_dir() {
   printf '%s\n' "$1/lib/node_modules/@musistudio/claude-code-router"
 }
 
+patch_ccr_codex_model_catalog() {
+  local ccr_package=$1
+  local cli_file="${ccr_package}/dist/main/cli.js"
+
+  # Some gateway providers reject the `custom` apply_patch tool emitted by
+  # newer Codex versions. Disable the freeform apply_patch tool in CCR's
+  # generated Codex model catalog so callers send regular function tools only.
+  [[ -f "${cli_file}" ]] || return 0
+
+  sed -i 's/applyPatchToolType:_/applyPatchToolType:null/' "${cli_file}"
+  grep -q 'applyPatchToolType:null' "${cli_file}" ||
+    warn 'Could not patch CCR Codex model catalog; custom apply_patch tools may fail on some gateways.'
+}
+
 ensure_better_sqlite() {
   local ccr_package
   ccr_package=$(ccr_package_dir "${NODE_INSTALL_DIR}")
@@ -615,6 +629,8 @@ install_latest_tools() {
     stop_ccr_service
   fi
   install_cli_packages
+  ccr_package=$(ccr_package_dir "${NODE_INSTALL_DIR}")
+  patch_ccr_codex_model_catalog "${ccr_package}"
   ensure_better_sqlite
   validate_tools_installation
   write_runtime_files
