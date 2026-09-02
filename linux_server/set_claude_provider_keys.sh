@@ -71,6 +71,10 @@ log() {
   printf '[ai-setup] %s\n' "$*"
 }
 
+warn() {
+  printf '[ai-setup] WARNING: %s\n' "$*" >&2
+}
+
 die() {
   printf '[ai-setup] ERROR: %s\n' "$*" >&2
   exit 1
@@ -629,7 +633,7 @@ discover_token_models() {
   local base_url=$2
   local api_key=$3
   local result_var=$4
-  local response discovered_models
+  local response discovered_models detail last_status
 
   if [[ -z "${api_key}" ]]; then
     printf -v "${result_var}" '%s' '[]'
@@ -637,16 +641,34 @@ discover_token_models() {
     return 0
   fi
 
-  if response=$(curl --fail --silent --show-error --max-time 20 \
-      -H "Authorization: Bearer ${api_key}" "${base_url%/}/models" 2>/dev/null) &&
-     discovered_models=$(parse_gateway_models <<<"${response}") &&
-     (( $(jq 'length' <<<"${discovered_models}") > 0 )); then
+  curl --silent --show-error --max-time 20 \
+    -H "Authorization: Bearer ${api_key}" "${base_url%/}/models" 2>/dev/null \
+    >"${TMPDIR:-/tmp}/ai-setup-models-response.${$}" || true
+  last_status=$?
+  response=$(cat "${TMPDIR:-/tmp}/ai-setup-models-response.${$}" 2>/dev/null || true)
+  rm -f -- "${TMPDIR:-/tmp}/ai-setup-models-response.${$}"
+  detail=''
+  if [ -n "${response}" ]; then
+    detail=$(jq -r 'if type == "object" then
+      (.message // .error.message // .error // .code // empty)
+    else empty end' <<<"${response}" 2>/dev/null || true)
+  fi
+
+  discovered_models=$(jq -c '[.data[]? | if type == "object" then .id elif type == "string" then . else empty end | select(type == "string" and length > 0)] | unique' <<<"${response}" 2>/dev/null || true)
+  if [[ -n "${discovered_models}" ]] && (( $(jq 'length' <<<"${discovered_models}") > 0 )); then
     printf -v "${result_var}" '%s' "${discovered_models}"
     log "${label}: token exposes $(jq 'length' <<<"${discovered_models}") model(s)"
     return 0
   fi
 
-  die "${label}: could not discover any models for this token at ${base_url%/}/models"
+  printf -v "${result_var}" '%s' '[]'
+  warn "${label}: skipped (could not discover any models for this token at ${base_url%/}/models)"
+  if [ -n "${detail}" ]; then
+    warn "${label}: upstream reported: ${detail}"
+  elif [ "${last_status}" -ne 0 ]; then
+    warn "${label}: upstream model-discovery request failed"
+  fi
+  log "${label}: other configured gateways will continue to be used"
 }
 
 probe_responses_models() {
@@ -681,8 +703,12 @@ probe_responses_models() {
     fi
   done < <(jq -r '.[]' <<<"${candidates}")
 
-  (( $(jq 'length' <<<"${verified_models}") > 0 )) ||
-    die "${label}: none of the configured candidate models are usable with this token"
+  if (( $(jq 'length' <<<"${verified_models}") == 0 )); then
+    printf -v "${result_var}" '%s' '[]'
+    warn "${label}: skipped (none of the configured candidate models are usable with this token)"
+    log "${label}: other configured gateways will continue to be used"
+    return 0
+  fi
   printf -v "${result_var}" '%s' "${verified_models}"
   log "${label}: token can use $(jq 'length' <<<"${verified_models}") verified model(s)"
 }
@@ -728,8 +754,10 @@ filter_codex_model_catalog() {
 augment_codex_model_catalog() {
   local catalog=$1
   local models=$2
+  local profile=${3:-direct}
   jq \
     --argjson custom "${models}" \
+    --arg profile "${profile}" \
     '($custom | unique) as $custom
      | .models as $existing
      | .models += [
@@ -766,12 +794,12 @@ augment_codex_model_catalog() {
              effective_context_window_percent:95,
              experimental_supported_tools:[],
              input_modalities:["text"],
-             tool_mode:"code_mode_only",
+             tool_mode:(if $profile == "volcano" then null else "code_mode_only" end),
              node_repl_disabled:false,
              node_repl_auto_review_required:false,
              multi_agent_version:"v2",
-             use_responses_lite:true,
-             supports_search_tool:true
+             use_responses_lite:($profile != "volcano"),
+             supports_search_tool:($profile != "volcano")
            }
        ]' <<<"${catalog}"
 }
@@ -796,7 +824,7 @@ write_codex_model_catalog() {
     >"${base_catalog}"
   local catalog
   catalog=$(filter_codex_model_catalog "$(<"${base_catalog}")" "${models}")
-  catalog=$(augment_codex_model_catalog "${catalog}" "${models}")
+  catalog=$(augment_codex_model_catalog "${catalog}" "${models}" "${profile}")
   write_secure_file "${catalog_file}" "${catalog}"
   rm -rf -- "${TEMP_DIR}"
   TEMP_DIR=""
@@ -810,8 +838,12 @@ codex_profile() {
       base_url='https://st8tp3ajl0df3n8b8l8qu.apigateway-cn-beijing.volceapi.com/v1'
       env_key=VOLCANO_AI_GATEWAY_API_KEY
       models=${VOLCANO_MODELS}
-      model=$(select_profile_model "${models}" deepseek-v4-flash deepseek-v4-pro)
-      note='# Direct Volcano Responses access does not support Codex tool items; use the default CCR profile for coding/tools.'
+      # Preferred priority is encoded by the order of the alternatives below;
+      # keep this in sync with `codex_model_compatibility_mode`.
+      model=$(select_profile_model "${models}" \
+        'deepseek-v4-flash' 'deepseek-v4-pro' 'doubao-seed-2.1-pro' \
+        'glm-5.2' 'qwen3.7-max' 'qwen3.7-plus')
+      note='# Direct Volcano Responses access does not support Codex tool items or token-accurate context windows.'
       ;;
     bailian)
       provider=bailian; name='Alibaba Bailian'
@@ -839,12 +871,13 @@ codex_profile() {
   printf '%s\n' '# Managed by set_claude_provider_keys.sh.' "${note}" \
     "model = \"${model}\"" "model_provider = \"${provider}\"" \
     "model_catalog_json = \"$(codex_model_catalog_file "${profile}")\"" \
-    'model_reasoning_effort = "high"' 'approval_policy = "never"' \
+    'model_reasoning_effort = "high"' \
+    'approval_policy = "never"' \
     'sandbox_mode = "danger-full-access"' 'web_search = "disabled"' \
     '' "[model_providers.${provider}]" \
     "name = \"${name}\"" "base_url = \"${base_url}\"" \
     "env_key = \"${env_key}\"" 'wire_api = "responses"' "models = ${models}" \
-    '' '[features]' 'multi_agent = false'
+    '' '[features]' 'multi_agent = false' ''
 }
 
 profile_model_list() {
@@ -1394,8 +1427,14 @@ require_configuration_dependencies() {
 configure_gateways_phase() {
   load_persisted_gateway_keys
   configure_gateway_keys
-  discover_configured_models
   write_codex_environment
+  discover_configured_models
+  if (( ! DRY_RUN )) && [[ "${VOLCANO_MODELS}" == "[]" && \
+        "${BAILIAN_MODELS}" == "[]" && \
+        "${BLACKAI_GPT_MODELS}" == "[]" && \
+        "${BLACKAI_CLAUDE_MODELS}" == "[]" ]]; then
+    die 'No gateway returned a usable model list; refusing to overwrite the working client/CCR configuration.'
+  fi
   write_codex_profiles
   configure_ccr
   verify_setup

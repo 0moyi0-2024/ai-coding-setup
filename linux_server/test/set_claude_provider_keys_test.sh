@@ -338,8 +338,11 @@ test_codex_model_catalog() {
     "[.models[].slug] | sort == (${VOLCANO_MODELS} | sort)" \
     "Codex loads only Volcano token models"
   assert_json "${rendered}" \
-    '[.models[] | select(.slug == "deepseek-v4-pro" and .apply_patch_tool_type == "freeform" and .supports_search_tool == true and .support_verbosity == false)] | length == 1' \
+    '[.models[] | select(.slug == "deepseek-v4-pro" and .apply_patch_tool_type == "freeform" and .support_verbosity == false)] | length == 1' \
     "Codex loads compatibility metadata"
+  assert_json "${rendered}" \
+    '[.models[] | select(.slug == "deepseek-v4-pro" and .supports_search_tool == false and .use_responses_lite == false and .tool_mode == null)] | length == 1' \
+    "Volcano direct profile keeps Responses-compatible model metadata"
   profile_stderr=$(CODEX_HOME="${CODEX_DIR}" "${NODE_INSTALL_DIR}/bin/codex" \
     --profile blackai-gpt debug prompt-input 'metadata check' 2>&1 >/dev/null) ||
     fail "Codex loads the blackai-gpt profile"
@@ -382,18 +385,24 @@ test_token_model_discovery() {
 
 test_model_discovery_failures() {
   local models output
+  models='not-empty'
   curl() { printf '%s\n' '{"data":[]}'; }
-  if output=$(discover_token_models 'empty provider' 'https://example.invalid/v1' \
-      'test-key' models 2>&1); then
-    fail "empty model discovery must fail"
-  fi
+  output=$(mktemp "${TEST_ROOT}/discover-empty.XXXXXX")
+  discover_token_models 'empty provider' 'https://example.invalid/v1' \
+    'test-key' models >"${output}" 2>&1
+  output=$(<"${output}")
+  assert_eq '[]' "${models}" "empty model discovery is skipped"
+  grep -Fq 'WARNING' <<<"${output}" || fail "empty discovery must warn"
   unset -f curl
+  models='not-empty'
 
   curl() { printf '%s\n' '{not-json'; }
-  if output=$(discover_token_models 'malformed provider' 'https://example.invalid/v1' \
-      'test-key' models 2>&1); then
-    fail "malformed model discovery must fail"
-  fi
+  output=$(mktemp "${TEST_ROOT}/discover-malformed.XXXXXX")
+  discover_token_models 'malformed provider' 'https://example.invalid/v1' \
+    'test-key' models >"${output}" 2>&1
+  output=$(<"${output}")
+  assert_eq '[]' "${models}" "malformed model discovery is skipped"
+  grep -Fq 'WARNING' <<<"${output}" || fail "malformed discovery must warn"
   unset -f curl
 
   models='not-empty'
@@ -421,11 +430,11 @@ test_volcano_model_probe() {
 
 test_volcano_probe_failure() {
   local models
+  models='not-empty'
   curl() { printf '500'; }
-  if (probe_responses_models 'failed Volcano' 'https://example.invalid/v1' 'test-key' \
-      '["deepseek-v4-pro"]' models >/dev/null 2>&1); then
-    fail "all failed Volcano probes must fail"
-  fi
+  probe_responses_models 'failed Volcano' 'https://example.invalid/v1' 'test-key' \
+    '["deepseek-v4-pro"]' models >/dev/null 2>&1
+  assert_eq '[]' "${models}" "all failed Volcano probes are skipped"
   unset -f curl
   pass "Volcano probe failure handling"
 }
