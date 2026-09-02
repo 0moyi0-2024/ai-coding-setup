@@ -559,13 +559,15 @@ ccr_package_dir() {
 patch_ccr_codex_model_catalog() {
   local ccr_package=$1
   local cli_file="${ccr_package}/dist/main/cli.js"
+  local patched
 
   # Some gateway providers reject the `custom` apply_patch tool emitted by
   # newer Codex versions. Disable the freeform apply_patch tool in CCR's
   # generated Codex model catalog so callers send regular function tools only.
   [[ -f "${cli_file}" ]] || return 0
 
-  sed -i 's/applyPatchToolType:_/applyPatchToolType:null/' "${cli_file}"
+  patched=$(sed 's/applyPatchToolType:[A-Za-z_][A-Za-z0-9_]*/applyPatchToolType:null/' "${cli_file}")
+  printf '%s\n' "${patched}" >"${cli_file}"
   grep -q 'applyPatchToolType:null' "${cli_file}" ||
     warn 'Could not patch CCR Codex model catalog; custom apply_patch tools may fail on some gateways.'
 }
