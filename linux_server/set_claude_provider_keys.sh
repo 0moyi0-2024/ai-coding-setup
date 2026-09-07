@@ -1121,6 +1121,20 @@ fetch_ccr_config() {
   printf '%s\n' "${response}"
 }
 
+resolve_ccr_client_key() {
+  # Claude Code's settings may embed a static token, but CCR 3.x profile
+  # takeover rewrites the managed settings file and switches client auth to
+  # an identity token file instead.  Fall back to CCR's own APIKEY then.
+  local settings_key config_response
+  settings_key=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN // empty' "${CLAUDE_SETTINGS_FILE}" 2>/dev/null || true)
+  if [[ -n "${settings_key}" ]]; then
+    printf '%s\n' "${settings_key}"
+    return 0
+  fi
+  config_response=$(fetch_ccr_config)
+  jq -r '.value.APIKEY // empty' <<<"${config_response}"
+}
+
 resolve_ccr_local_key() {
   local config_response=$1
   local local_key
@@ -1409,10 +1423,12 @@ verify_setup() {
   last_error=$(jq -r '.value.lastError // empty' <<<"${status}")
   [[ "${state}" != error ]] || die "CCR gateway is in error state: ${last_error:-unknown error}"
 
-  gateway_url=$(jq -r '.env.ANTHROPIC_BASE_URL' "${CLAUDE_SETTINGS_FILE}")
-  local_key=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN' "${CLAUDE_SETTINGS_FILE}")
-  [[ -n "${local_key}" && "${local_key}" != "null" ]] ||
-    die "Claude settings ${CLAUDE_SETTINGS_FILE} has no ANTHROPIC_AUTH_TOKEN; rerun configuration."
+  gateway_url=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "${CLAUDE_SETTINGS_FILE}")
+  [[ -n "${gateway_url}" ]] ||
+    die "Claude settings ${CLAUDE_SETTINGS_FILE} has no ANTHROPIC_BASE_URL; rerun configuration."
+  local_key=$(resolve_ccr_client_key)
+  [[ -n "${local_key}" ]] ||
+    die "No CCR client key available: settings has no ANTHROPIC_AUTH_TOKEN and CCR config has no APIKEY."
   local models_http models_tmp
   models_tmp=$(mktemp)
   models_http=$(curl --silent --show-error --max-time 10 \
