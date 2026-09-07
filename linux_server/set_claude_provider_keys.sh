@@ -1411,12 +1411,20 @@ verify_setup() {
 
   gateway_url=$(jq -r '.env.ANTHROPIC_BASE_URL' "${CLAUDE_SETTINGS_FILE}")
   local_key=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN' "${CLAUDE_SETTINGS_FILE}")
-  models_response=$(curl --fail --silent --show-error --max-time 10 \
+  [[ -n "${local_key}" && "${local_key}" != "null" ]] ||
+    die "Claude settings ${CLAUDE_SETTINGS_FILE} has no ANTHROPIC_AUTH_TOKEN; rerun configuration."
+  local models_http models_tmp
+  models_tmp=$(mktemp)
+  models_http=$(curl --silent --show-error --max-time 10 \
+    --output "${models_tmp}" --write-out '%{http_code}' \
     -H "Authorization: Bearer ${local_key}" \
-    "${gateway_url}/v1/models") ||
-    die "CCR client authentication or model discovery failed at ${gateway_url}/v1/models"
+    "${gateway_url}/v1/models") || true
+  models_response=$(head -c 500 "${models_tmp}" 2>/dev/null || true)
+  rm -f -- "${models_tmp}"
+  [[ "${models_http}" == "200" ]] ||
+    die "CCR gateway rejected the client key at ${gateway_url}/v1/models (HTTP ${models_http:-none}). Response: ${models_response:-<empty body>}"
   jq -e '.data | type == "array" and length > 0' <<<"${models_response}" >/dev/null ||
-    die 'CCR model discovery returned no models.'
+    die "CCR model discovery returned no models. Response: ${models_response}"
   log "CCR gateway state: ${state}; model discovery: ok"
 }
 
