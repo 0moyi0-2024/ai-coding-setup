@@ -1435,12 +1435,12 @@ verify_setup() {
     --output "${models_tmp}" --write-out '%{http_code}' \
     -H "Authorization: Bearer ${local_key}" \
     "${gateway_url}/v1/models") || true
-  models_response=$(head -c 500 "${models_tmp}" 2>/dev/null || true)
+  models_response=$(cat "${models_tmp}" 2>/dev/null || true)
   rm -f -- "${models_tmp}"
   [[ "${models_http}" == "200" ]] ||
-    die "CCR gateway rejected the client key at ${gateway_url}/v1/models (HTTP ${models_http:-none}). Response: ${models_response:-<empty body>}"
+    die "CCR gateway rejected the client key at ${gateway_url}/v1/models (HTTP ${models_http:-none}). Response: $(head -c 500 <<<"${models_response:-<empty body>}")"
   jq -e '.data | type == "array" and length > 0' <<<"${models_response}" >/dev/null ||
-    die "CCR model discovery returned no models. Response: ${models_response}"
+    die "CCR model discovery returned no models. Response: $(head -c 500 <<<"${models_response}")"
   log "CCR gateway state: ${state}; model discovery: ok"
 }
 
