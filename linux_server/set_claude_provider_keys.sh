@@ -229,6 +229,12 @@ configure_ccr_autostart() {
     return 0
   fi
 
+  # systemd 203/EXEC surfaces as a crash loop that is painful to debug; catch
+  # a missing/unreadable helper here instead, before installing the unit.
+  if [[ ! -r "${CCR_AUTOSTART_HELPER}" ]]; then
+    die "CCR autostart helper ${CCR_AUTOSTART_HELPER} is missing or unreadable; run the tool installation phase first."
+  fi
+
   unit_user=${SETUP_USER}
   if ((EUID == 0)); then
     # The configuration phase may have started CCR as root.  Stop it before
@@ -249,8 +255,8 @@ Environment=HOME=${AGENT_HOME}
 Environment=CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}
 Environment=CODEX_HOME=${CODEX_DIR}
 Environment=PATH=${AGENT_BIN_DIR}:${NODE_INSTALL_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=${CCR_AUTOSTART_HELPER}
-ExecStop=${AGENT_BIN_DIR}/ccr stop
+ExecStart=/usr/bin/bash ${CCR_AUTOSTART_HELPER}
+ExecStop=/usr/bin/bash ${AGENT_BIN_DIR}/ccr stop
 Restart=on-failure
 RestartSec=5
 
@@ -277,8 +283,8 @@ Environment=HOME=${AGENT_HOME}
 Environment=CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}
 Environment=CODEX_HOME=${CODEX_DIR}
 Environment=PATH=${AGENT_BIN_DIR}:${NODE_INSTALL_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=${CCR_AUTOSTART_HELPER}
-ExecStop=${AGENT_BIN_DIR}/ccr stop
+ExecStart=/usr/bin/bash ${CCR_AUTOSTART_HELPER}
+ExecStop=/usr/bin/bash ${AGENT_BIN_DIR}/ccr stop
 Restart=on-failure
 RestartSec=5
 
