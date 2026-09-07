@@ -1028,8 +1028,8 @@ wait_for_ccr_service() {
   local attempt service_url pid
   for ((attempt=1; attempt<=30; attempt+=1)); do
     if [[ -f "${CCR_SERVICE_FILE}" ]]; then
-      service_url=$(jq -r '.url // empty' "${CCR_SERVICE_FILE}")
-      pid=$(jq -r '.pid // 0' "${CCR_SERVICE_FILE}")
+      service_url=$(jq -r '.url // empty' "${CCR_SERVICE_FILE}" 2>/dev/null || true)
+      pid=$(jq -r '.pid // 0' "${CCR_SERVICE_FILE}" 2>/dev/null || true)
       if [[ -n "${service_url}" ]] && kill -0 "${pid}" 2>/dev/null &&
          curl --fail --silent --show-error --max-time 2 "${service_url%%\?*}" >/dev/null 2>&1; then
         return 0
@@ -1037,7 +1037,7 @@ wait_for_ccr_service() {
     fi
     sleep 1
   done
-  die 'CCR management service did not become ready.'
+  die "CCR management service did not become ready within 30s (missing or incomplete ${CCR_SERVICE_FILE}). Check: systemctl status ${CCR_SYSTEMD_UNIT} and journalctl -u ${CCR_SYSTEMD_UNIT} --no-pager | tail -50"
 }
 
 stop_ccr_service() {
@@ -1074,7 +1074,12 @@ start_ccr_service() {
 
 load_ccr_connection() {
   local service_url
-  service_url=$(jq -r '.url' "${CCR_SERVICE_FILE}")
+  if [[ ! -f "${CCR_SERVICE_FILE}" ]]; then
+    die "CCR service file ${CCR_SERVICE_FILE} does not exist; the CCR service is not running. Check: systemctl status ${CCR_SYSTEMD_UNIT}"
+  fi
+  service_url=$(jq -r '.url // empty' "${CCR_SERVICE_FILE}")
+  [[ -n "${service_url}" ]] ||
+    die "CCR service file ${CCR_SERVICE_FILE} has no usable url field; try re-running this script."
   CCR_WEB_TOKEN=${service_url##*ccr_web_token=}
   CCR_MANAGEMENT_URL=${service_url%%\?*}
   CCR_MANAGEMENT_URL=${CCR_MANAGEMENT_URL%/}
@@ -1385,6 +1390,10 @@ verify_setup() {
   done
   jq empty "${CLAUDE_SETTINGS_FILE}"
 
+  # configure_ccr_autostart restarted CCR via systemd; the new instance needs
+  # a few seconds to boot before it (re)writes the service file.  Wait for it
+  # instead of failing with a jq "file not found" error.
+  wait_for_ccr_service
   load_ccr_connection
   local status
   status=$(ccr_rpc '{"method":"getGatewayStatus","args":[]}')
