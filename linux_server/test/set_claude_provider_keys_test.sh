@@ -279,7 +279,16 @@ test_codex_profiles() {
     fail "BlackAI GPT profile disables unsupported web search tools"
   grep -Fq 'multi_agent = false' <<<"${claude}" ||
     fail "BlackAI Claude profile disables unsupported namespace tools"
-  # 验证全局配置
+  # 验证全局配置，并模拟已经由附加脚本安装的 JD profile。基础安装器重跑时必须
+  # 保留 provider 注册，否则之前的 JD 会话无法直接 codex resume。
+  mkdir -p "${CODEX_MODEL_CATALOG_DIR}"
+  cat >"${CODEX_DIR}/jd.config.toml" <<'TOML'
+model_provider = "jd"
+[model_providers.jd]
+name = "JD LLM Gateway"
+TOML
+  printf '%s\n' '{"models":[{"slug":"GPT-5.6-Sol-joybuilder"}]}' \
+    >"${CODEX_MODEL_CATALOG_DIR}/jd.json"
   write_codex_global_config
   global_config=$(<"${CODEX_DIR}/config.toml")
   grep -Fq 'approval_policy = "never"' <<<"${global_config}" ||
@@ -298,6 +307,14 @@ test_codex_profiles() {
     fail "Global Codex config missing BlackAI GPT token variable"
   grep -Fq '[model_providers.blackaicoding-claude]' <<<"${global_config}" ||
     fail "Global Codex config missing BlackAI Claude provider"
+  grep -Fq '# BEGIN JD gateway provider' <<<"${global_config}" ||
+    fail "Global Codex config did not preserve the JD provider registration"
+  grep -Fq '[model_providers.jd]' <<<"${global_config}" ||
+    fail "Global Codex config missing JD provider required by resume"
+  grep -Fq 'env_key = "JD_GATEWAY_TOKEN"' <<<"${global_config}" ||
+    fail "Global Codex config JD provider references the wrong token variable"
+  grep -Fq 'models = ["GPT-5.6-Sol-joybuilder"]' <<<"${global_config}" ||
+    fail "Global Codex config did not preserve the JD catalog models"
   assert_file_mode 600 "${CODEX_DIR}/config.toml" "Global Codex config mode"
   pass "Codex profile rendering"
 }

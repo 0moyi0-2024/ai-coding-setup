@@ -17,7 +17,7 @@ umask 077
 #   --output-dir <dir>    指定配置根目录（默认自动识别 /agent 或 $HOME）
 #   --standalone          生成独立文件（不写入 ~/.claude ~/.codex，而是输出到 output-dir 下的
 #                         claude-settings.json 和 codex-config.toml，方便手动复制）
-#   --merge               追加 JD 支持（默认；不修改 Claude/Codex 主配置）
+#   --merge               追加 JD 支持（默认；保留 Claude/Codex 主配置默认行为）
 #   --claude-only         只生成 Claude Code 配置
 #   --codex-only          只生成 Codex 配置
 #   --no-probe            跳过模型探测，直接使用全部候选模型
@@ -83,7 +83,7 @@ usage() {
   --output-dir <dir>    指定配置根目录（默认自动识别 /agent 或 \$HOME）
   --standalone          生成独立文件到 output-dir 下（不覆盖 ~/.claude ~/.codex）
   --merge               追加 JD 配置（默认）：写入 .codex/jd.config.toml，并为 Claude
-                        生成 claude-jd 启动器；不修改已有 Claude/Codex 主配置
+                        生成 claude-jd 启动器；Codex 主配置只注册 JD provider
   --claude-only         只生成 Claude Code 配置
   --codex-only          只生成 Codex 配置
   --no-probe            跳过模型探测，直接使用全部候选模型
@@ -99,7 +99,7 @@ usage() {
   默认/--merge: 追加 JD 环境变量和 claude-jd 启动器 + 写入 \${output_dir}/.codex/jd.config.toml
   --standalone: \${output_dir}/claude-settings.json + \${output_dir}/codex-config.toml
 
-默认追加模式不会修改 Claude settings.json 或 Codex config.toml；之后使用:
+默认追加模式不会修改 Claude settings.json 或 Codex 的默认模型；之后使用:
   claude-jd
   codex --profile jd
 USAGE
@@ -282,6 +282,16 @@ codex_config_path() {
     fi
   elif [[ -n "${CODEX_HOME:-}" ]]; then
     printf '%s/config.toml' "${CODEX_HOME%/}"
+  else
+    printf '%s/.codex/config.toml' "${OUTPUT_DIR}"
+  fi
+}
+
+codex_main_config_path() {
+  if [[ -n "${CODEX_HOME:-}" ]]; then
+    printf '%s/config.toml' "${CODEX_HOME%/}"
+  elif [[ -f "${AGENT_DIR}/env.sh" && -d "${AGENT_DIR}/config/codex" ]]; then
+    printf '%s/config/codex/config.toml' "${AGENT_DIR}"
   else
     printf '%s/.codex/config.toml' "${OUTPUT_DIR}"
   fi
@@ -525,6 +535,31 @@ exclude = [
 TOML_EOF
 }
 
+build_jd_provider_registration() {
+  local -a models=("$@")
+  local models_toml='' quoted_model base_url_toml
+  local first=1 model
+  for model in "${models[@]}"; do
+    quoted_model=$(toml_string "${model}")
+    if ((first)); then
+      models_toml="[${quoted_model}"
+      first=0
+    else
+      models_toml+=", ${quoted_model}"
+    fi
+  done
+  models_toml+=']'
+  base_url_toml=$(toml_string "${CODEX_BASE_URL}")
+  cat <<TOML_EOF
+[model_providers.jd]
+name = "JD LLM Gateway"
+base_url = ${base_url_toml}
+env_key = "JD_GATEWAY_TOKEN"
+wire_api = "responses"
+models = ${models_toml}
+TOML_EOF
+}
+
 generate_codex_catalog() {
   local -a models=("$@")
   local codex_bin
@@ -665,6 +700,50 @@ remove_jd_environment_block() {
   mv -f -- "${tmp}" "${target}"
 }
 
+register_jd_codex_provider() {
+  local main_config dir tmp final target_mode provider_block
+  main_config=$(codex_main_config_path)
+  provider_block=$(build_jd_provider_registration "$@")
+
+  if ((DRY_RUN)); then
+    log "[dry-run] 将在 ${main_config} 注册 JD provider；不改变默认 provider 或 model"
+    return 0
+  fi
+
+  dir=$(dirname "${main_config}")
+  mkdir -p "${dir}"
+  tmp=$(mktemp "${dir}/.jd-provider.XXXXXXXX")
+  final="${tmp}.final"
+  if [[ -f "${main_config}" ]]; then
+    awk '
+      $0 == "# BEGIN JD gateway provider" { skip=1; next }
+      $0 == "# END JD gateway provider" { skip=0; next }
+      !skip { print }
+    ' "${main_config}" >"${tmp}"
+  else
+    : >"${tmp}"
+  fi
+
+  # Respect an existing manually managed provider and avoid producing an
+  # invalid duplicate TOML table. Managed blocks are refreshed on every run.
+  if grep -Eq '^[[:space:]]*\[model_providers\.jd\][[:space:]]*$' "${tmp}"; then
+    rm -f -- "${tmp}"
+    log "${main_config} 已包含手动维护的 JD provider；保留现有定义"
+    return 0
+  fi
+
+  {
+    cat "${tmp}"
+    printf '\n# BEGIN JD gateway provider\n%s\n# END JD gateway provider\n' "${provider_block}"
+  } >"${final}"
+  target_mode=$(stat -c '%a' "${main_config}" 2>/dev/null || printf '600')
+  chmod "${target_mode}" "${final}"
+  match_owner "${final}" "${main_config}"
+  mv -f -- "${final}" "${main_config}"
+  rm -f -- "${tmp}"
+  log "已在 ${main_config} 注册 JD provider；默认 provider 和 model 保持不变"
+}
+
 save_jd_environment() {
   local codex_dir legacy_env rc_file current_shell_source startup_updated=0
   codex_dir=$(dirname "$(codex_config_path)")
@@ -777,7 +856,10 @@ main() {
     write_file "${codex_path}" "${codex_content}" 600
 
     if ((MERGE)); then
-      log '现有 Codex config.toml 未修改；JD 网关请使用: codex --profile jd'
+      if (( ! OUTPUT_DIR_SET )); then
+        register_jd_codex_provider "${codex_models[@]}"
+      fi
+      log 'Codex 主配置仅注册 JD provider；默认 provider 和 model 未修改'
     elif (( ! STANDALONE )); then
       log 'JD 已写入 Codex 主配置；启动命令: codex'
     fi

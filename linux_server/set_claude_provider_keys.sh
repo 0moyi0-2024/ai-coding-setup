@@ -965,9 +965,28 @@ codex_provider_block() {
     "env_key = \"${env_key}\"" 'wire_api = "responses"' "models = ${models}" ''
 }
 
+codex_jd_provider_block() {
+  # Codex resume restores the provider name from the session but does not
+  # automatically reapply the profile used to create it. Keep a non-secret JD
+  # provider registration in the base config whenever the JD profile exists.
+  [[ -f "${CODEX_DIR}/jd.config.toml" ]] || return 0
+  local models='["GPT-5.6-Terra-joybuilder", "GPT-5.6-Sol-joybuilder"]'
+  if [[ -r "${CODEX_MODEL_CATALOG_DIR}/jd.json" ]]; then
+    models=$(jq -c '[.models[]?.slug | select(type == "string" and length > 0)]' \
+      "${CODEX_MODEL_CATALOG_DIR}/jd.json" 2>/dev/null || printf '%s' "${models}")
+    [[ "${models}" != '[]' ]] || models='["GPT-5.6-Terra-joybuilder", "GPT-5.6-Sol-joybuilder"]'
+  fi
+  printf '%s\n' '[model_providers.jd]' \
+    'name = "JD LLM Gateway"' \
+    'base_url = "http://llm-gw.jd.local/v1"' \
+    'env_key = "JD_GATEWAY_TOKEN"' \
+    'wire_api = "responses"' \
+    "models = ${models}"
+}
+
 write_codex_global_config() {
   # 全局配置同时注册已配置的 provider，使旧会话无需 profile 也能解析 provider。
-  local global_config profile provider_block
+  local global_config profile provider_block jd_provider_block
   global_config='# Managed by set_claude_provider_keys.sh — global defaults.'
   global_config+=$'\n'"approval_policy = \"never\""
   global_config+=$'\n'"sandbox_mode = \"danger-full-access\""
@@ -978,6 +997,11 @@ write_codex_global_config() {
     global_config+=$'\n'"${provider_block}"
   done
   global_config+=$'\n# END ai-setup global Codex providers'
+  jd_provider_block=$(codex_jd_provider_block)
+  if [[ -n "${jd_provider_block}" ]]; then
+    global_config+=$'\n\n# BEGIN JD gateway provider\n'"${jd_provider_block}"
+    global_config+=$'\n# END JD gateway provider'
+  fi
   write_secure_file "${CODEX_DIR}/config.toml" "${global_config}"
 }
 

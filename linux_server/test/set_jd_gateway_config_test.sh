@@ -99,8 +99,9 @@ TOML
     bash "${SCRIPT_PATH}" --no-probe 2>&1)
 
   [[ "${output}" != *"${TEST_TOKEN}"* ]] || fail 'token leaked to installer output'
-  cmp "${install_root}/original-config.toml" "${codex_dir}/config.toml" >/dev/null ||
-    fail 'existing Codex config.toml changed'
+  cmp "${install_root}/original-config.toml" \
+    <(head -c "$(stat -c '%s' "${install_root}/original-config.toml")" "${codex_dir}/config.toml") \
+    >/dev/null || fail 'existing Codex defaults changed while registering JD provider'
   assert_file_mode 600 "${codex_dir}/jd.config.toml"
   assert_file_mode 600 "${codex_dir}/catalogs/jd.json"
   [[ ! -e "${codex_dir}/jd.env" ]] || fail 'JD token was saved in a separate jd.env file'
@@ -123,6 +124,12 @@ TOML
     fail 'JD profile does not use the Volcano sandbox mode'
   grep -Fq 'models = ["GPT-5.6-Terra-joybuilder", "GPT-5.6-Sol-joybuilder"]' \
     "${codex_dir}/jd.config.toml" || fail 'JD profile model list is missing'
+  [[ "$(grep -Fxc '[model_providers.jd]' "${codex_dir}/config.toml")" -eq 1 ]] ||
+    fail 'Codex main config does not contain exactly one JD provider registration'
+  grep -Fq 'env_key = "JD_GATEWAY_TOKEN"' "${codex_dir}/config.toml" ||
+    fail 'Codex main config JD provider does not use the shared environment token'
+  ! grep -Fq "${TEST_TOKEN}" "${codex_dir}/config.toml" ||
+    fail 'Codex main config contains the JD token'
   ! grep -Fq 'theme = ' "${codex_dir}/jd.config.toml" ||
     fail 'JD profile overrides the Codex theme instead of inheriting the Volcano background'
   ! grep -Fq "${TEST_TOKEN}" "${codex_dir}/jd.config.toml" ||
@@ -160,6 +167,8 @@ TOML
     bash "${SCRIPT_PATH}" --no-probe </dev/null >/dev/null 2>&1
   [[ "$(grep -Fxc '# BEGIN JD gateway token' "${user_home}/.bashrc")" -eq 1 ]] ||
     fail 'rerun duplicated the shell startup block'
+  [[ "$(grep -Fxc '# BEGIN JD gateway provider' "${codex_dir}/config.toml")" -eq 1 ]] ||
+    fail 'rerun duplicated the Codex JD provider registration'
   [[ -z "$(find "${user_home}" -maxdepth 1 -name '.jd-source.*' -print -quit)" ]] ||
     fail 'shell startup update left temporary files behind'
   cmp "${install_root}/original-claude-settings.json" "${claude_dir}/settings.json" >/dev/null ||
@@ -178,7 +187,7 @@ TOML
   [[ "${saved_token}" == "${replacement_token}" ]] ||
     fail 'explicit JD_GATEWAY_TOKEN did not replace the saved token'
 
-  pass 'default interactive append preserves existing Claude, Codex, and CCR configuration'
+  pass 'default append preserves existing defaults and registers JD for session resume'
 }
 
 test_dry_run() {

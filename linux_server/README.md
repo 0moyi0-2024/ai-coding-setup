@@ -219,15 +219,19 @@ bash ./set_jd_gateway_config.sh
 ```
 
 `--merge` 与默认行为相同，可在自动化命令中显式使用。这个模式不会修改 Claude 的主
-`settings.json` 或 Codex 的主 `config.toml`。已保存过 token 时，交互运行可直接
-按 Enter 保留原值；非交互运行会复用当前环境或 `/agent/env.sh` 中保存的值。
+`settings.json`，也不会改变 Codex 主配置中的默认 provider、模型和已有网关。它只向
+Codex 主配置追加一个不含 token 的 JD provider 注册，使 JD 会话之后可以直接使用
+`codex resume`。已保存过 token 时，交互运行可直接按 Enter 保留原值；非交互运行会优先
+使用当前环境中的值，否则复用 `/agent/env.sh` 中保存的值。
 
 - Codex 会生成独立 profile 文件：`$CODEX_HOME/jd.config.toml`。未设置 `CODEX_HOME`
   时，本安装器环境写入 `/agent/config/codex/jd.config.toml`；普通环境写入
   `~/.codex/jd.config.toml`。
 - 同时生成 JD 独立模型 catalog：`$CODEX_HOME/catalogs/jd.json`；模型列表只包含探测成功
   的 JD 模型，不会继承全局配置里的火山模型。
-- 现有 `$CODEX_HOME/config.toml` 不会被修改。
+- `$CODEX_HOME/config.toml` 只增加带受管标记的 `[model_providers.jd]` 注册；不会改变原来的
+  `model_provider`、`model`、CCR 配置或其他 provider。这个注册使不带 `--profile jd` 的
+  `codex resume <JD会话ID>` 也能识别会话中保存的 JD provider。
 - 安装器布局中，脚本把 `JD_GATEWAY_TOKEN` 直接追加到 `/agent/env.sh` 的受管区块，并把
   文件权限设置为 `600`；不会另外生成 `jd.env`。主安装器以后重写 `/agent/env.sh` 时会
   读取并保留这个值。当前已打开的 shell 需要执行一次：
@@ -287,8 +291,9 @@ bash ./set_jd_gateway_config.sh --dry-run --no-probe
 
 `--standalone` 会在输出目录生成 `claude-settings.json` 和 `codex-config.toml`。
 `--merge` 和 `--standalone` 不能同时使用。默认追加模式不会修改 Claude 的
-`settings.json` 或 Codex 的 `config.toml`，只更新 `/agent/env.sh` 的 JD 变量、
-`jd.config.toml`、模型 catalog 和 `/agent/bin/claude-jd` 启动器。Codex 当前通过独立
+`settings.json` 或 Codex 的默认路由，只更新 `/agent/env.sh` 的 JD 变量、在 Codex 主配置
+中注册不含 token 的 JD provider，并维护 `jd.config.toml`、模型 catalog 和
+`/agent/bin/claude-jd` 启动器。Codex 当前通过独立
 `<profile>.config.toml` 实现 `--profile`，因此 `jd.config.toml` 是必须保留的 profile 文件。
 
 ### token 和权限
