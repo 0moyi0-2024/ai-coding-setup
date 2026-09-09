@@ -159,6 +159,8 @@ TOML
   [[ "${launcher_output}" != *"${TEST_TOKEN}"* ]] || fail 'claude-jd arguments contain the token'
 
   # A non-interactive rerun can reuse the managed shell block.
+  cp "${user_home}/.bashrc" "${install_root}/first-bashrc"
+  cp "${codex_dir}/config.toml" "${install_root}/first-config.toml"
   env -u JD_GATEWAY_TOKEN \
     PATH="${fake_bin}:/usr/bin:/bin" \
     HOME="${user_home}" \
@@ -169,6 +171,10 @@ TOML
     fail 'rerun duplicated the shell startup block'
   [[ "$(grep -Fxc '# BEGIN JD gateway provider' "${codex_dir}/config.toml")" -eq 1 ]] ||
     fail 'rerun duplicated the Codex JD provider registration'
+  cmp "${install_root}/first-bashrc" "${user_home}/.bashrc" >/dev/null ||
+    fail 'rerun changed shell startup bytes while reusing the same token'
+  cmp "${install_root}/first-config.toml" "${codex_dir}/config.toml" >/dev/null ||
+    fail 'rerun changed Codex main config bytes'
   [[ -z "$(find "${user_home}" -maxdepth 1 -name '.jd-source.*' -print -quit)" ]] ||
     fail 'shell startup update left temporary files behind'
   cmp "${install_root}/original-claude-settings.json" "${claude_dir}/settings.json" >/dev/null ||
@@ -188,6 +194,43 @@ TOML
     fail 'explicit JD_GATEWAY_TOKEN did not replace the saved token'
 
   pass 'default append preserves existing defaults and registers JD for session resume'
+}
+
+test_manual_provider_cleanup() {
+  local install_root="${TEST_ROOT}/manual-provider"
+  local codex_dir="${install_root}/codex"
+  local user_home="${install_root}/home"
+  local fake_bin="${install_root}/bin"
+  mkdir -p "${codex_dir}" "${user_home}"
+  make_fake_codex "${fake_bin}"
+  cat >"${codex_dir}/config.toml" <<'TOML'
+model = "existing-model"
+
+# BEGIN JD gateway provider
+[model_providers.jd]
+name = "obsolete managed provider"
+# END JD gateway provider
+
+[model_providers.jd]
+name = "manually maintained provider"
+base_url = "http://manual.jd.local/v1"
+wire_api = "responses"
+env_key = "JD_GATEWAY_TOKEN"
+TOML
+
+  JD_GATEWAY_TOKEN="${TEST_TOKEN}" \
+    PATH="${fake_bin}:/usr/bin:/bin" \
+    HOME="${user_home}" \
+    CODEX_HOME="${codex_dir}" \
+    bash "${SCRIPT_PATH}" --codex-only --no-probe >/dev/null 2>&1
+
+  [[ "$(grep -Fxc '[model_providers.jd]' "${codex_dir}/config.toml")" -eq 1 ]] ||
+    fail 'manual JD provider cleanup left duplicate TOML tables'
+  ! grep -Fq '# BEGIN JD gateway provider' "${codex_dir}/config.toml" ||
+    fail 'obsolete managed provider block was not removed'
+  grep -Fq 'name = "manually maintained provider"' "${codex_dir}/config.toml" ||
+    fail 'manual JD provider was not preserved'
+  pass 'manual JD provider replaces obsolete managed registration cleanly'
 }
 
 test_dry_run() {
@@ -383,6 +426,7 @@ test_mode_validation() {
 
 command -v jq >/dev/null 2>&1 || fail 'jq is required for the test'
 test_default_merge
+test_manual_provider_cleanup
 test_dry_run
 test_agent_dir_discovery
 test_probe_failure_is_non_destructive

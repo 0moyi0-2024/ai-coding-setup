@@ -111,6 +111,11 @@ sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh --configure-only
 AI_SETUP_DNF_DISABLE_REPO='updates,update' bash ./set_claude_provider_keys.sh
 ```
 
+Claude Code 和 Codex 的 npm 主包还需要与当前 CPU 和 libc 匹配的原生包。安装器会
+强制包含 npm optional dependencies；如果 npm 仍跳过当前平台包，安装器会从主包的
+`package.json` 读取精确版本并补装。只有 `claude --version` 和 `codex --version`
+都能正常执行后，脚本才会继续生成网关配置，避免留下显示安装成功但命令无法启动的环境。
+
 ## 修改或上库前运行开发测试
 
 运行配套测试脚本：
@@ -121,7 +126,8 @@ bash ./test/set_claude_provider_keys_test.sh
 
 测试使用隔离的临时目录，不会修改 `/agent`，不会访问真实模型网关，也不会消耗
 API token。它会检查安装编排、CCR 配置、Claude 配置，以及 Codex profile 和模型
-catalog 的生成与隔离。当前环境能够找到 Codex 时，还会使用真实 Codex CLI 加载每个
+catalog 的生成与隔离，也会模拟平台原生包被 npm 跳过以及 CLI 无法启动的失败场景。
+当前环境能够找到 Codex 时，还会使用真实 Codex CLI 加载每个
 临时 profile。测试脚本退出状态为 0，且输出中没有 `not ok`，即表示测试通过。
 
 ## 安装后验证 Codex

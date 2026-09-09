@@ -252,7 +252,10 @@ prompt_token() {
   local entered=''
   local prompt='请输入 JD 网关 token (输入内容隐藏)'
   [[ -z "${current}" ]] || prompt+='，直接回车保留现有值'
-  read -r -s -p "${prompt}: " entered
+  if ! read -r -s -p "${prompt}: " entered; then
+    printf '\n' >&2
+    die '未提供 JD 网关 token；请交互输入、使用 --token，或设置 JD_GATEWAY_TOKEN'
+  fi
   printf '\n'
   if [[ -n "${entered}" ]]; then
     TOKEN=${entered}
@@ -658,20 +661,20 @@ write_claude_jd_launcher() {
 
 upsert_jd_environment_block() {
   local target=$1
-  local dir tmp kept final target_mode
+  local dir tmp final target_mode
   dir=$(dirname "${target}")
   tmp=$(mktemp "${dir}/.jd-source.XXXXXXXX")
   final="${tmp}.final"
 
-  awk '
-    $0 == "# BEGIN JD gateway token" { skip=1; next }
-    $0 == "# END JD gateway token" { skip=0; next }
-    !skip { print }
-  ' "${target}" >"${tmp}" 2>/dev/null || : >"${tmp}"
+  without_managed_block "${target}" \
+    '# BEGIN JD gateway token' '# END JD gateway token' >"${tmp}"
 
   {
-    cat "${tmp}"
-    printf '\n# BEGIN JD gateway token\n'
+    if [[ -s "${tmp}" ]]; then
+      cat "${tmp}"
+      printf '\n'
+    fi
+    printf '# BEGIN JD gateway token\n'
     printf 'export JD_GATEWAY_TOKEN=%q\n' "${TOKEN}"
     printf '# END JD gateway token\n'
   } >"${final}"
@@ -689,15 +692,28 @@ remove_jd_environment_block() {
   local dir tmp target_mode
   dir=$(dirname "${target}")
   tmp=$(mktemp "${dir}/.jd-remove.XXXXXXXX")
-  awk '
-    $0 == "# BEGIN JD gateway token" { skip=1; next }
-    $0 == "# END JD gateway token" { skip=0; next }
-    !skip { print }
-  ' "${target}" >"${tmp}"
+  without_managed_block "${target}" \
+    '# BEGIN JD gateway token' '# END JD gateway token' >"${tmp}"
   target_mode=$(stat -c '%a' "${target}")
   chmod "${target_mode}" "${tmp}"
   match_owner "${tmp}" "${target}"
   mv -f -- "${tmp}" "${target}"
+}
+
+without_managed_block() {
+  local target=$1
+  local begin_marker=$2
+  local end_marker=$3
+  [[ -f "${target}" ]] || return 0
+  awk -v begin_marker="${begin_marker}" -v end_marker="${end_marker}" '
+    $0 == begin_marker { skip=1; next }
+    $0 == end_marker { skip=0; next }
+    !skip { lines[++count]=$0 }
+    END {
+      while (count > 0 && lines[count] ~ /^[[:space:]]*$/) count--
+      for (line=1; line<=count; line++) print lines[line]
+    }
+  ' "${target}"
 }
 
 register_jd_codex_provider() {
@@ -714,27 +730,26 @@ register_jd_codex_provider() {
   mkdir -p "${dir}"
   tmp=$(mktemp "${dir}/.jd-provider.XXXXXXXX")
   final="${tmp}.final"
-  if [[ -f "${main_config}" ]]; then
-    awk '
-      $0 == "# BEGIN JD gateway provider" { skip=1; next }
-      $0 == "# END JD gateway provider" { skip=0; next }
-      !skip { print }
-    ' "${main_config}" >"${tmp}"
-  else
-    : >"${tmp}"
-  fi
+  without_managed_block "${main_config}" \
+    '# BEGIN JD gateway provider' '# END JD gateway provider' >"${tmp}"
 
   # Respect an existing manually managed provider and avoid producing an
   # invalid duplicate TOML table. Managed blocks are refreshed on every run.
   if grep -Eq '^[[:space:]]*\[model_providers\.jd\][[:space:]]*$' "${tmp}"; then
-    rm -f -- "${tmp}"
+    target_mode=$(stat -c '%a' "${main_config}" 2>/dev/null || printf '600')
+    chmod "${target_mode}" "${tmp}"
+    match_owner "${tmp}" "${main_config}"
+    mv -f -- "${tmp}" "${main_config}"
     log "${main_config} 已包含手动维护的 JD provider；保留现有定义"
     return 0
   fi
 
   {
-    cat "${tmp}"
-    printf '\n# BEGIN JD gateway provider\n%s\n# END JD gateway provider\n' "${provider_block}"
+    if [[ -s "${tmp}" ]]; then
+      cat "${tmp}"
+      printf '\n'
+    fi
+    printf '# BEGIN JD gateway provider\n%s\n# END JD gateway provider\n' "${provider_block}"
   } >"${final}"
   target_mode=$(stat -c '%a' "${main_config}" 2>/dev/null || printf '600')
   chmod "${target_mode}" "${final}"

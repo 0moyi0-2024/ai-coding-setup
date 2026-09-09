@@ -8,6 +8,11 @@ readonly SCRIPT_PATH="$(cd -- "${TEST_DIR}/.." && pwd -P)/set_claude_provider_ke
 readonly MANUAL_PATH="$(cd -- "${TEST_DIR}/.." && pwd -P)/README.md"
 readonly REAL_CODEX_BIN="$(command -v codex || true)"
 readonly REAL_CODEX_PATH="${PATH}"
+REAL_NODE_BIN="$(command -v node || true)"
+if [[ -z "${REAL_NODE_BIN}" && -x /agent/node/bin/node ]]; then
+  REAL_NODE_BIN=/agent/node/bin/node
+fi
+readonly REAL_NODE_BIN
 
 INSTALLED_TEST_COUNT=0
 INSTALLED_TEMP_DIR=''
@@ -871,38 +876,174 @@ FAKE_DNF
 }
 
 test_cli_install_command() {
-  local npm_args node_args claude_package
+  local npm_args claude_package codex_package resolved_platform architecture
+  local claude_suffix='' claude_native codex_native claude_spec codex_spec
   local fake_npm="${NODE_INSTALL_DIR}/bin/npm"
   local fake_node="${NODE_INSTALL_DIR}/bin/node"
   local args_file="${TEST_ROOT}/npm-args"
-  local node_file="${TEST_ROOT}/node-args"
+  local npm_count_file="${TEST_ROOT}/npm-count"
+  local postinstall_marker="${TEST_ROOT}/claude-postinstall"
   claude_package="${NODE_INSTALL_DIR}/lib/node_modules/@anthropic-ai/claude-code"
-  mkdir -p "${NODE_INSTALL_DIR}/bin" "${claude_package}"
-  printf '%s\n' '// postinstall' >"${claude_package}/install.cjs"
+  codex_package="${NODE_INSTALL_DIR}/lib/node_modules/@openai/codex"
+  mkdir -p "${NODE_INSTALL_DIR}/bin" "${claude_package}" "${codex_package}"
+  [[ -n "${REAL_NODE_BIN}" ]] || fail "real Node.js is required for CLI installation tests"
+  rm -f -- "${fake_node}"
+  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "${REAL_NODE_BIN}" >"${fake_node}"
+  chmod 700 "${fake_node}"
+  cat >"${claude_package}/install.cjs" <<'CLAUDE_POSTINSTALL'
+require('fs').writeFileSync(process.env.CLAUDE_POSTINSTALL_MARKER, 'ran\n');
+CLAUDE_POSTINSTALL
+  cat >"${claude_package}/package.json" <<'CLAUDE_PACKAGE'
+{
+  "version": "2.1.263",
+  "optionalDependencies": {
+    "@anthropic-ai/claude-code-linux-x64": "2.1.263",
+    "@anthropic-ai/claude-code-linux-arm64": "2.1.263",
+    "@anthropic-ai/claude-code-linux-x64-musl": "2.1.263",
+    "@anthropic-ai/claude-code-linux-arm64-musl": "2.1.263"
+  }
+}
+CLAUDE_PACKAGE
+  cat >"${codex_package}/package.json" <<'CODEX_PACKAGE'
+{
+  "version": "0.153.4",
+  "optionalDependencies": {
+    "@openai/codex-linux-x64": "npm:@openai/codex@0.153.4-linux-x64",
+    "@openai/codex-linux-arm64": "npm:@openai/codex@0.153.4-linux-arm64"
+  }
+}
+CODEX_PACKAGE
   cat >"${fake_npm}" <<'FAKE_NPM'
 #!/usr/bin/env bash
-printf '%s\n' "$@" >"${NPM_TEST_ARGS}"
-if [[ "${NPM_TEST_FAIL:-0}" == 1 ]]; then exit 7; fi
+set -Eeuo pipefail
+count=$(($(cat "${NPM_TEST_COUNT}" 2>/dev/null || printf 0) + 1))
+printf '%s\n' "${count}" >"${NPM_TEST_COUNT}"
+printf '%s\n' "CALL ${count}" >>"${NPM_TEST_ARGS}"
+printf '%s\n' "$@" >>"${NPM_TEST_ARGS}"
+if [[ "${NPM_TEST_FAIL_PHASE:-}" == primary && "${*}" == *'@openai/codex@latest'* ]]; then
+  exit 7
+fi
+if [[ "${*}" != *'@openai/codex@latest'* ]]; then
+  [[ "${NPM_TEST_FAIL_PHASE:-}" != fallback ]] || exit 8
+  for spec in "$@"; do
+    case "${spec}" in
+      @anthropic-ai/claude-code-linux-*@*)
+        package_name=${spec%@*}
+        package_version=${spec##*@}
+        mkdir -p "${NPM_TEST_PREFIX}/lib/node_modules/${package_name}"
+        printf '{"version":"%s"}\n' "${package_version}" \
+          >"${NPM_TEST_PREFIX}/lib/node_modules/${package_name}/package.json"
+        ;;
+      @openai/codex-linux-*@npm:*)
+        package_name=${spec%%@npm:*}
+        package_version=${spec##*@}
+        mkdir -p "${NPM_TEST_PREFIX}/lib/node_modules/${package_name}"
+        printf '{"version":"%s"}\n' "${package_version}" \
+          >"${NPM_TEST_PREFIX}/lib/node_modules/${package_name}/package.json"
+        ;;
+    esac
+  done
+fi
 FAKE_NPM
-  cat >"${fake_node}" <<'FAKE_NODE'
-#!/usr/bin/env bash
-printf '%s\n' "$@" >"${NODE_TEST_ARGS}"
-FAKE_NODE
-  chmod 700 "${fake_npm}" "${fake_node}"
-  export NPM_TEST_ARGS="${args_file}" NODE_TEST_ARGS="${node_file}" NPM_TEST_FAIL=0
+  chmod 700 "${fake_npm}"
+  export NPM_TEST_ARGS="${args_file}" NPM_TEST_COUNT="${npm_count_file}"
+  export NPM_TEST_PREFIX="${NODE_INSTALL_DIR}" CLAUDE_POSTINSTALL_MARKER="${postinstall_marker}"
+  export NPM_TEST_FAIL_PHASE=''
   install_cli_packages >/dev/null
   npm_args=$(<"${args_file}")
-  node_args=$(<"${node_file}")
+  grep -Fq -- '--include=optional' <<<"${npm_args}" ||
+    fail "npm install includes platform optional dependencies"
   grep -Fq -- '--allow-scripts=@anthropic-ai/claude-code,better-sqlite3' <<<"${npm_args}" ||
     fail "npm install allows native package scripts"
   grep -Fq '@openai/codex@latest' <<<"${npm_args}" || fail "npm installs Codex"
-  grep -Fq 'install.cjs' <<<"${node_args}" || fail "Claude native postinstall runs"
-  NPM_TEST_FAIL=1
+  [[ -f "${postinstall_marker}" ]] || fail "Claude native postinstall runs"
+
+  resolved_platform=$(node_platform)
+  case "${resolved_platform}" in
+    linux-x64) architecture=x64 ;;
+    linux-arm64) architecture=arm64 ;;
+    *) fail "unexpected native test platform: ${resolved_platform}" ;;
+  esac
+  [[ "$(node_libc_variant)" != musl ]] || claude_suffix=-musl
+  claude_native="@anthropic-ai/claude-code-linux-${architecture}${claude_suffix}"
+  codex_native="@openai/codex-linux-${architecture}"
+  claude_spec=$(package_optional_dependency_spec \
+    "${claude_package}/package.json" "${claude_native}")
+  codex_spec=$(package_optional_dependency_spec \
+    "${codex_package}/package.json" "${codex_native}")
+  grep -Fq "${claude_native}@${claude_spec}" <<<"${npm_args}" ||
+    fail "npm repairs the exact Claude native package"
+  grep -Fq "${codex_native}@${codex_spec}" <<<"${npm_args}" ||
+    fail "npm repairs the exact Codex native package"
+
+  printf '%s\n' '{"version":"0.0.0-stale"}' \
+    >"${NODE_INSTALL_DIR}/lib/node_modules/${claude_native}/package.json"
+  printf '%s\n' '{"version":"0.0.0-stale"}' \
+    >"${NODE_INSTALL_DIR}/lib/node_modules/${codex_native}/package.json"
+  : >"${args_file}"
+  : >"${npm_count_file}"
+  NPM_TEST_FAIL_PHASE=fallback
+  export NPM_TEST_FAIL_PHASE
   if install_cli_packages >/dev/null 2>&1; then
-    fail "npm failure must propagate"
+    fail "native package repair failure must propagate"
   fi
-  unset NPM_TEST_ARGS NODE_TEST_ARGS NPM_TEST_FAIL
-  pass "CLI install command and postinstall"
+
+  NPM_TEST_FAIL_PHASE=primary
+  export NPM_TEST_FAIL_PHASE
+  if install_cli_packages >/dev/null 2>&1; then
+    fail "primary npm failure must propagate"
+  fi
+  unset NPM_TEST_ARGS NPM_TEST_COUNT NPM_TEST_PREFIX \
+    CLAUDE_POSTINSTALL_MARKER NPM_TEST_FAIL_PHASE
+  pass "CLI install command, native package repair, and postinstall"
+}
+
+test_cli_version_validation() {
+  local ccr_package output
+  ccr_package=$(ccr_package_dir "${NODE_INSTALL_DIR}")
+  mkdir -p "${NODE_INSTALL_DIR}/bin" "${ccr_package}"
+  [[ -n "${REAL_NODE_BIN}" ]] || fail "real Node.js is required for CLI validation tests"
+  rm -f -- "${NODE_INSTALL_DIR}/bin/node"
+  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "${REAL_NODE_BIN}" \
+    >"${NODE_INSTALL_DIR}/bin/node"
+  chmod 700 "${NODE_INSTALL_DIR}/bin/node"
+  printf '%s\n' '{"version":"test-ccr"}' >"${ccr_package}/package.json"
+  cat >"${NODE_INSTALL_DIR}/bin/claude" <<'FAKE_CLAUDE_VERSION'
+#!/usr/bin/env bash
+[[ "${CLI_VERSION_FAIL:-}" != claude ]] || exit 9
+printf '%s\n' '2.1.263 (Claude Code)'
+FAKE_CLAUDE_VERSION
+  cat >"${NODE_INSTALL_DIR}/bin/codex" <<'FAKE_CODEX_VERSION'
+#!/usr/bin/env bash
+[[ "${CLI_VERSION_FAIL:-}" != codex ]] || exit 10
+printf '%s\n' 'codex-cli 0.153.4'
+FAKE_CODEX_VERSION
+  cat >"${NODE_INSTALL_DIR}/bin/ccr" <<'FAKE_CCR_VERSION'
+#!/usr/bin/env bash
+exit 0
+FAKE_CCR_VERSION
+  [[ -x "${NODE_INSTALL_DIR}/bin/npm" ]] || fail "CLI validation fixture is missing npm"
+  chmod 700 "${NODE_INSTALL_DIR}/bin/claude" \
+    "${NODE_INSTALL_DIR}/bin/codex" "${NODE_INSTALL_DIR}/bin/ccr"
+
+  output=$(validate_tools_installation 2>&1) || fail "valid CLI versions were rejected"
+  grep -Fq 'Installed 2.1.263 (Claude Code)' <<<"${output}" ||
+    fail "Claude version was not reported"
+  grep -Fq 'Installed codex-cli 0.153.4' <<<"${output}" ||
+    fail "Codex version was not reported"
+
+  if output=$(CLI_VERSION_FAIL=claude validate_tools_installation 2>&1); then
+    fail "broken Claude installation must stop validation"
+  fi
+  grep -Fq 'Claude Code installation is unusable' <<<"${output}" ||
+    fail "broken Claude installation has no actionable error"
+  if output=$(CLI_VERSION_FAIL=codex validate_tools_installation 2>&1); then
+    fail "broken Codex installation must stop validation"
+  fi
+  grep -Fq 'Codex installation is unusable' <<<"${output}" ||
+    fail "broken Codex installation has no actionable error"
+  unset CLI_VERSION_FAIL
+  pass "CLI startup validation blocks unusable native installations"
 }
 
 test_better_sqlite_rebuild() {
@@ -1004,6 +1145,7 @@ test_dry_run_is_non_destructive
 test_node_version_guard
 test_dnf_metadata_recovery
 test_cli_install_command
+test_cli_version_validation
 test_better_sqlite_rebuild
 test_ccr_connection_helpers
 test_ccr_rpc_error

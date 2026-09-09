@@ -562,6 +562,7 @@ install_cli_packages() {
     NPM_CONFIG_PREFIX="${NODE_INSTALL_DIR}" \
     NPM_CONFIG_CACHE="${AGENT_CACHE_DIR}/npm" \
     "${NODE_INSTALL_DIR}/bin/npm" install -g \
+      --include=optional \
       --allow-scripts=@anthropic-ai/claude-code,better-sqlite3 \
       @anthropic-ai/claude-code@latest \
       @openai/codex@latest \
@@ -573,8 +574,140 @@ install_cli_packages() {
   local claude_package="${NODE_INSTALL_DIR}/lib/node_modules/@anthropic-ai/claude-code"
   [[ -f "${claude_package}/install.cjs" ]] ||
     die "Claude Code postinstall script is missing."
+  ensure_cli_native_packages || return 1
   log "Ensuring the Claude Code native binary is installed"
-  (cd "${claude_package}" && "${NODE_INSTALL_DIR}/bin/node" install.cjs)
+  (cd "${claude_package}" && "${NODE_INSTALL_DIR}/bin/node" install.cjs) || {
+    log "ERROR: Claude Code could not install its platform-native binary"
+    return 1
+  }
+}
+
+package_optional_dependency_spec() {
+  local package_json=$1
+  local dependency_name=$2
+  "${NODE_INSTALL_DIR}/bin/node" -e '
+    const fs = require("fs");
+    const packageJson = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const spec = packageJson.optionalDependencies?.[process.argv[2]];
+    if (typeof spec !== "string" || spec.length === 0) process.exit(1);
+    process.stdout.write(spec);
+  ' "${package_json}" "${dependency_name}"
+}
+
+native_dependency_matches_spec() {
+  local package_dir=$1
+  local dependency_name=$2
+  local dependency_spec=$3
+  "${NODE_INSTALL_DIR}/bin/node" -e '
+    try {
+      const fs = require("fs");
+      const path = require.resolve(`${process.argv[2]}/package.json`, {
+        paths: [process.argv[1]],
+      });
+      const installedVersion = JSON.parse(fs.readFileSync(path, "utf8")).version;
+      const spec = process.argv[3];
+      const expectedVersion = spec.startsWith("npm:")
+        ? spec.slice(spec.lastIndexOf("@") + 1)
+        : spec;
+      const exactVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+      if (exactVersion.test(expectedVersion) && installedVersion !== expectedVersion) {
+        process.exit(1);
+      }
+    } catch {
+      process.exit(1);
+    }
+  ' "${package_dir}" "${dependency_name}" "${dependency_spec}" >/dev/null 2>&1
+}
+
+node_libc_variant() {
+  "${NODE_INSTALL_DIR}/bin/node" -e '
+    const report = typeof process.report?.getReport === "function"
+      ? process.report.getReport()
+      : null;
+    const isMusl = report !== null && report.header?.glibcVersionRuntime === undefined;
+    process.stdout.write(isMusl ? "musl" : "glibc");
+  '
+}
+
+ensure_cli_native_packages() {
+  local resolved_platform architecture claude_suffix=''
+  resolved_platform=$(node_platform)
+  case "${resolved_platform}" in
+    linux-x64) architecture=x64 ;;
+    linux-arm64) architecture=arm64 ;;
+    *)
+      log "ERROR: Claude Code and Codex do not provide a supported native package for ${resolved_platform}"
+      return 1
+      ;;
+  esac
+  if [[ "$(node_libc_variant)" == musl ]]; then
+    claude_suffix=-musl
+  fi
+
+  local claude_package="${NODE_INSTALL_DIR}/lib/node_modules/@anthropic-ai/claude-code"
+  local codex_package="${NODE_INSTALL_DIR}/lib/node_modules/@openai/codex"
+  local claude_native="@anthropic-ai/claude-code-linux-${architecture}${claude_suffix}"
+  local codex_native="@openai/codex-linux-${architecture}"
+  local claude_spec codex_spec dependency package_dir spec
+  [[ -f "${claude_package}/package.json" ]] || {
+    log "ERROR: Claude Code package metadata is missing from ${claude_package}"
+    return 1
+  }
+  [[ -f "${codex_package}/package.json" ]] || {
+    log "ERROR: Codex package metadata is missing from ${codex_package}"
+    return 1
+  }
+  claude_spec=$(package_optional_dependency_spec \
+    "${claude_package}/package.json" "${claude_native}") || {
+    log "ERROR: Installed Claude Code does not declare ${claude_native}"
+    return 1
+  }
+  codex_spec=$(package_optional_dependency_spec \
+    "${codex_package}/package.json" "${codex_native}") || {
+    log "ERROR: Installed Codex does not declare ${codex_native}"
+    return 1
+  }
+
+  local -a missing_native_specs=()
+  for dependency in "${claude_native}" "${codex_native}"; do
+    if [[ "${dependency}" == "${claude_native}" ]]; then
+      package_dir=${claude_package}
+      spec=${claude_spec}
+    else
+      package_dir=${codex_package}
+      spec=${codex_spec}
+    fi
+    if ! native_dependency_matches_spec \
+        "${package_dir}" "${dependency}" "${spec}"; then
+      missing_native_specs+=("${dependency}@${spec}")
+    fi
+  done
+
+  if ((${#missing_native_specs[@]})); then
+    log "Installing missing native CLI packages for ${resolved_platform}"
+    if ! env \
+      PATH="${NODE_INSTALL_DIR}/bin:${PATH}" \
+      NPM_CONFIG_PREFIX="${NODE_INSTALL_DIR}" \
+      NPM_CONFIG_CACHE="${AGENT_CACHE_DIR}/npm" \
+      "${NODE_INSTALL_DIR}/bin/npm" install -g \
+        --include=optional \
+        --allow-scripts=@anthropic-ai/claude-code \
+        "${missing_native_specs[@]}"; then
+      log "ERROR: npm could not install the native CLI packages for ${resolved_platform}"
+      return 1
+    fi
+  fi
+
+  native_dependency_matches_spec \
+    "${claude_package}" "${claude_native}" "${claude_spec}" || {
+    log "ERROR: Claude Code native dependency ${claude_native} is unavailable or has the wrong version"
+    return 1
+  }
+  native_dependency_matches_spec \
+    "${codex_package}" "${codex_native}" "${codex_spec}" || {
+    log "ERROR: Codex native dependency ${codex_native} is unavailable or has the wrong version"
+    return 1
+  }
 }
 
 ccr_package_dir() {
@@ -620,7 +753,7 @@ ensure_better_sqlite() {
 }
 
 validate_tools_installation() {
-  local executable ccr_package
+  local executable ccr_package claude_version codex_version ccr_version
 
   for executable in node npm claude codex ccr; do
     [[ -x "${NODE_INSTALL_DIR}/bin/${executable}" ]] ||
@@ -630,16 +763,29 @@ validate_tools_installation() {
   ccr_package=$(ccr_package_dir "${NODE_INSTALL_DIR}")
   [[ -f "${ccr_package}/package.json" ]] ||
     die "Installation is missing ${ccr_package}/package.json"
-  log "Installed $("${NODE_INSTALL_DIR}/bin/claude" --version)"
-  log "Installed $("${NODE_INSTALL_DIR}/bin/codex" --version)"
-  log "Installed Claude Code Router $("${NODE_INSTALL_DIR}/bin/node" -p \
-    "require('${ccr_package}/package.json').version")"
+  if ! claude_version=$("${NODE_INSTALL_DIR}/bin/claude" --version 2>&1); then
+    printf '%s\n' "${claude_version}" >&2
+    die "Claude Code installation is unusable; its platform-native package could not be started."
+  fi
+  if ! codex_version=$("${NODE_INSTALL_DIR}/bin/codex" --version 2>&1); then
+    printf '%s\n' "${codex_version}" >&2
+    die "Codex installation is unusable; its platform-native package could not be started."
+  fi
+  if ! ccr_version=$("${NODE_INSTALL_DIR}/bin/node" -p \
+      "require('${ccr_package}/package.json').version" 2>&1); then
+    printf '%s\n' "${ccr_version}" >&2
+    die "Claude Code Router installation metadata could not be read."
+  fi
+  log "Installed ${claude_version}"
+  log "Installed ${codex_version}"
+  log "Installed Claude Code Router ${ccr_version}"
 }
 
 install_latest_tools() {
   if ((DRY_RUN)); then
     log "Would install the tools directly in ${NODE_INSTALL_DIR}"
     run npm install -g \
+      --include=optional \
       --allow-scripts=@anthropic-ai/claude-code,better-sqlite3 \
       @anthropic-ai/claude-code@latest \
       @openai/codex@latest \
@@ -655,7 +801,8 @@ install_latest_tools() {
   if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
     stop_ccr_service
   fi
-  install_cli_packages
+  install_cli_packages ||
+    die "Claude Code or Codex installation is incomplete; gateway configuration was not changed."
   ccr_package=$(ccr_package_dir "${NODE_INSTALL_DIR}")
   patch_ccr_codex_model_catalog "${ccr_package}"
   ensure_better_sqlite
