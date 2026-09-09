@@ -35,12 +35,14 @@ VOLCANO_MODELS='[]'
 BAILIAN_MODELS='[]'
 BLACKAI_GPT_MODELS='[]'
 BLACKAI_CLAUDE_MODELS='[]'
+JD_MODELS='[]'
 TEMP_DIR=""
 readonly -a GATEWAY_KEY_NAMES=(
   VOLCANO_AI_GATEWAY_API_KEY
   BAILIAN_API_KEY
   BLACKAICODING_GPT_API_KEY
   BLACKAICODING_CLAUDE_API_KEY
+  JD_GATEWAY_API_KEY
 )
 
 readonly CCR_HOST=127.0.0.1
@@ -752,6 +754,8 @@ discover_configured_models() {
     "${BLACKAICODING_GPT_API_KEY:-}" BLACKAI_GPT_MODELS
   discover_token_models 'BlackAI Claude' 'https://www.blackaicoding.com/v1' \
     "${BLACKAICODING_CLAUDE_API_KEY:-}" BLACKAI_CLAUDE_MODELS
+  discover_token_models 'JD LLM Gateway' 'http://llm-gw.jd.local/v1' \
+    "${JD_GATEWAY_API_KEY:-}" JD_MODELS
 }
 
 select_profile_model() {
@@ -811,9 +815,11 @@ augment_codex_model_catalog() {
              web_search_tool_type:"text_and_image",
              context_window:(if ($slug | startswith("claude-")) then 200000
                              elif ($slug | test("^(deepseek|qwen)")) then 1000000
+                             elif ($slug | test("joybuilder$|sol$|terra$"; "i")) then 1000000
                              else 128000 end),
              max_context_window:(if ($slug | startswith("claude-")) then 200000
                                  elif ($slug | test("^(deepseek|qwen)")) then 1000000
+                                 elif ($slug | test("joybuilder$|sol$|terra$"; "i")) then 1000000
                                  else 128000 end),
              effective_context_window_percent:95,
              experimental_supported_tools:[],
@@ -889,6 +895,14 @@ codex_profile() {
       model=$(select_profile_model "${models}" claude-sonnet-4-6 claude-sonnet-5 claude-opus-4-6)
       note='# Some Claude/Grok models may reject Codex web_search tools with HTTP 422.'
       ;;
+    jd)
+      provider=jd-llm-gateway; name='JD LLM Gateway'
+      base_url='http://llm-gw.jd.local/v1'; env_key=JD_GATEWAY_API_KEY
+      models=${JD_MODELS}
+      model=$(select_profile_model "${models}" \
+        'GPT-5.6-Terra-joybuilder' 'GPT-5.6-Sol-joybuilder')
+      note='# This profile requires the upstream gateway to support the Responses API.'
+      ;;
     *) die "Unknown Codex profile: ${profile}" ;;
   esac
   [[ -n "${model}" ]] || die "No token-authorized models are available for profile ${profile}."
@@ -910,6 +924,7 @@ profile_model_list() {
     bailian) printf '%s\n' "${BAILIAN_MODELS}" ;;
     blackai-gpt) printf '%s\n' "${BLACKAI_GPT_MODELS}" ;;
     blackai-claude) printf '%s\n' "${BLACKAI_CLAUDE_MODELS}" ;;
+    jd) printf '%s\n' "${JD_MODELS}" ;;
     *) die "Unknown Codex profile: $1" ;;
   esac
 }
@@ -937,6 +952,11 @@ codex_provider_block() {
       base_url='https://www.blackaicoding.com/v1'
       env_key=BLACKAICODING_CLAUDE_API_KEY
       ;;
+    jd)
+      provider=jd-llm-gateway; name='JD LLM Gateway'
+      base_url='http://llm-gw.jd.local/v1'
+      env_key=JD_GATEWAY_API_KEY
+      ;;
     *) die "Unknown Codex profile: ${profile}" ;;
   esac
   models=$(profile_model_list "${profile}")
@@ -953,7 +973,7 @@ write_codex_global_config() {
   global_config+=$'\n'"approval_policy = \"never\""
   global_config+=$'\n'"sandbox_mode = \"danger-full-access\""
   global_config+=$'\n\n# BEGIN ai-setup global Codex providers'
-  for profile in volcano bailian blackai-gpt blackai-claude; do
+  for profile in volcano bailian blackai-gpt blackai-claude jd; do
     provider_block=$(codex_provider_block "${profile}")
     [[ -n "${provider_block}" ]] || continue
     global_config+=$'\n'"${provider_block}"
@@ -968,7 +988,7 @@ write_codex_profiles() {
   [[ ! -f "${legacy_catalog}" ]] || run unlink "${legacy_catalog}"
   write_codex_global_config
   local profile models profile_file catalog_file
-  for profile in volcano bailian blackai-gpt blackai-claude; do
+  for profile in volcano bailian blackai-gpt blackai-claude jd; do
     models=$(profile_model_list "${profile}")
     profile_file="${CODEX_DIR}/${profile}.config.toml"
     catalog_file=$(codex_model_catalog_file "${profile}")
@@ -1158,6 +1178,8 @@ build_ccr_config() {
   local volcano_pro_model=${12}
   local blackai_claude_key=${13:-}
   local blackai_claude_models=${14:-'[]'}
+  local jd_key=${15:-}
+  local jd_models=${16:-'[]'}
 
   jq \
     --arg local_key "${local_key}" \
@@ -1173,6 +1195,8 @@ build_ccr_config() {
     --arg volcano_pro_model "${volcano_pro_model}" \
     --arg blackai_claude_key "${blackai_claude_key}" \
     --argjson blackai_claude_models "${blackai_claude_models}" \
+    --arg jd_key "${jd_key}" \
+    --argjson jd_models "${jd_models}" \
     --arg claude_settings_file "${CLAUDE_SETTINGS_FILE}" \
     --arg codex_home "${CODEX_DIR}" \
     '.value as $cfg
@@ -1181,9 +1205,11 @@ build_ccr_config() {
      | ([$cfg.Providers[]? | select(.id == "zhipu" or .name == "蓝区智谱")][0].apiKey // "") as $old_zhipu
      | ([$cfg.Providers[]? | select(.id == "xiyu" or .name == "蓝区稀宇")][0].apiKey // "") as $old_xiyu
      | ([$cfg.Providers[]? | select(.id == "blackai-claude" or .name == "BlackAI Claude")][0].apiKey // "") as $old_blackai_claude
+     | ([$cfg.Providers[]? | select(.id == "jd-llm-gateway" or .name == "JD LLM Gateway")][0].apiKey // "") as $old_jd
      | (if $volcano_key != "" then $volcano_key else $old_volcano end) as $volcano
      | (if $bailian_key != "" then $bailian_key else $old_bailian end) as $bailian
      | (if $blackai_claude_key != "" then $blackai_claude_key else $old_blackai_claude end) as $blackai_claude
+     | (if $jd_key != "" then $jd_key else $old_jd end) as $jd
      | ($cfg // {})
      | .profile = (.profile // {})
      | .profile.profiles = (.profile.profiles // [])
@@ -1202,8 +1228,9 @@ build_ccr_config() {
            (.id != "volcano-ai-gateway" and .name != "火山AI网关") and
            (.id != "bailian" and .name != "蓝区百炼") and
            (.id != "zhipu" and .name != "蓝区智谱") and
-           (.id != "xiyu" and .name != "蓝区稀宇")
-           and (.id != "blackai-claude" and .name != "BlackAI Claude")
+           (.id != "xiyu" and .name != "蓝区稀宇") and
+           (.id != "blackai-claude" and .name != "BlackAI Claude") and
+           (.id != "jd-llm-gateway" and .name != "JD LLM Gateway")
          )] +
          [{
            id:"volcano-ai-gateway", name:"火山AI网关",
@@ -1224,6 +1251,12 @@ build_ccr_config() {
            apiKey:$blackai_claude, type:"openai_chat_completions",
            models:$blackai_claude_models
          },{
+           id:"jd-llm-gateway", name:"JD LLM Gateway",
+           enabled:($jd != "" and ($jd_models | length) > 0),
+           baseUrl:"http://llm-gw.jd.local/v1",
+           apiKey:$jd, type:"openai_chat_completions",
+           models:$jd_models
+         },{
            id:"zhipu", name:"蓝区智谱", enabled:false,
            baseUrl:"https://open.bigmodel.cn/api/paas/v4",
            apiKey:$old_zhipu, type:"openai_chat_completions",
@@ -1236,6 +1269,7 @@ build_ccr_config() {
        )
      | .preferredProvider = (if $volcano_fast_model != "" then "火山AI网关"
                              elif ($bailian_models | length) > 0 then "蓝区百炼"
+                             elif ($jd_models | length) > 0 then "JD LLM Gateway"
                              else (.preferredProvider // "") end)
      | if $volcano_fast_model != "" then
          .profile.claudeCode.model = ("火山AI网关/" + $volcano_fast_model)
@@ -1299,7 +1333,9 @@ configure_ccr() {
     "${volcano_fast_model}" \
     "${volcano_pro_model}" \
     "${BLACKAICODING_CLAUDE_API_KEY:-}" \
-    "${BLACKAI_CLAUDE_MODELS}")
+    "${BLACKAI_CLAUDE_MODELS}" \
+    "${JD_GATEWAY_API_KEY:-}" \
+    "${JD_MODELS}")
   save_ccr_config "${config}"
 
   restart_ccr_gateway
@@ -1367,7 +1403,7 @@ configure_claude_settings() {
 
 configure_gateway_keys() {
   if ((DRY_RUN)); then
-    log "Would prompt for Volcano, Bailian, BlackAI GPT, and BlackAI Claude keys"
+    log "Would prompt for Volcano, Bailian, BlackAI GPT, BlackAI Claude, and JD keys"
     return 0
   fi
 
@@ -1379,6 +1415,7 @@ configure_gateway_keys() {
   prompt_secret 'Bailian API key' "${BAILIAN_API_KEY:-}" BAILIAN_API_KEY
   prompt_secret 'BlackAI GPT API key' "${BLACKAICODING_GPT_API_KEY:-}" BLACKAICODING_GPT_API_KEY
   prompt_secret 'BlackAI Claude/Grok API key' "${BLACKAICODING_CLAUDE_API_KEY:-}" BLACKAICODING_CLAUDE_API_KEY
+  prompt_secret 'JD LLM Gateway token' "${JD_GATEWAY_API_KEY:-}" JD_GATEWAY_API_KEY
 
   export "${GATEWAY_KEY_NAMES[@]}"
 }
@@ -1392,7 +1429,7 @@ verify_setup() {
   claude --version
   codex --version
   local catalog catalog_file profile profile_models profile_stderr
-  for profile in volcano bailian blackai-gpt blackai-claude; do
+  for profile in volcano bailian blackai-gpt blackai-claude jd; do
     profile_models=$(profile_model_list "${profile}")
     (( $(jq 'length' <<<"${profile_models}") > 0 )) || continue
     catalog_file=$(codex_model_catalog_file "${profile}")
@@ -1489,7 +1526,8 @@ configure_gateways_phase() {
   if (( ! DRY_RUN )) && [[ "${VOLCANO_MODELS}" == "[]" && \
         "${BAILIAN_MODELS}" == "[]" && \
         "${BLACKAI_GPT_MODELS}" == "[]" && \
-        "${BLACKAI_CLAUDE_MODELS}" == "[]" ]]; then
+        "${BLACKAI_CLAUDE_MODELS}" == "[]" && \
+        "${JD_MODELS}" == "[]" ]]; then
     die 'No gateway returned a usable model list; refusing to overwrite the working client/CCR configuration.'
   fi
   write_codex_profiles
@@ -1503,7 +1541,7 @@ print_completion_hints() {
   log "New Bash sessions load the environment automatically. Activate it in this current shell:"
   printf '  source %s\n' "${AGENT_ENV_FILE}"
   ((CONFIGURE_GATEWAYS)) || return 0
-  for profile in volcano bailian blackai-gpt blackai-claude; do
+  for profile in volcano bailian blackai-gpt blackai-claude jd; do
     models=$(profile_model_list "${profile}")
     (( $(jq 'length' <<<"${models}") > 0 )) || continue
     profile_hints+=("${profile}")

@@ -81,7 +81,7 @@ profile。直接以 root 执行且不设置它时，文件会归 root，普通�
 sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh --configure-only
 ```
 
-脚本会依次询问以下四个可选 API key：
+脚本会依次询问以下五个可选 API key：
 
 | API key | 用途 |
 | --- | --- |
@@ -89,6 +89,7 @@ sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh --configure-only
 | Bailian | Claude 和 Codex |
 | BlackAI GPT | Codex |
 | BlackAI Claude/Grok | Claude 和 Codex |
+| JD Gateway Token | Claude 和 Codex |
 
 - 已经保存过的 key：直接按 Enter 会保留原值。
 - 从未配置过的 key：直接按 Enter 会跳过该网关。
@@ -165,7 +166,7 @@ claude
 ```
 
 进入 Claude Code 后，通过 `/model` 查看 CCR 从已配置 token 发现的模型并进行选择。
-火山、百炼和 BlackAI Claude/Grok 的模型会按 provider 分组显示。
+火山、百炼、BlackAI Claude/Grok 和 JD 的模型会按 provider 分组显示。
 
 查看 CCR 状态：
 
@@ -183,6 +184,7 @@ codex --profile volcano
 codex --profile bailian
 codex --profile blackai-gpt
 codex --profile blackai-claude
+codex --profile jd
 ```
 
 火山网关的原生 Responses 接口不支持 Codex 的 `additional_tools`、`namespace` 等工具项，
@@ -206,6 +208,7 @@ jq -r '.models[].slug' "/agent/config/codex/catalogs/volcano.json"
 jq -r '.models[].slug' "/agent/config/codex/catalogs/bailian.json"
 jq -r '.models[].slug' "/agent/config/codex/catalogs/blackai-gpt.json"
 jq -r '.models[].slug' "/agent/config/codex/catalogs/blackai-claude.json"
+jq -r '.models[].slug' "/agent/config/codex/catalogs/jd.json"
 ```
 
 未配置的 provider 不会有对应 catalog 文件。`/models` 返回模型名称，只说明网关向

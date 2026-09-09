@@ -40,6 +40,7 @@ installed_profile_env_key() {
     bailian) printf '%s\n' BAILIAN_API_KEY ;;
     blackai-gpt) printf '%s\n' BLACKAICODING_GPT_API_KEY ;;
     blackai-claude) printf '%s\n' BLACKAICODING_CLAUDE_API_KEY ;;
+    jd) printf '%s\n' JD_GATEWAY_API_KEY ;;
     *) installed_fail "unknown Codex profile: $1" ;;
   esac
 }
@@ -52,7 +53,7 @@ run_installed_codex_test() {
   local configured_profiles=0
   local profile profile_file catalog_file env_key expected_models
   local rendered_catalog actual_models profile_stderr catalog_stderr
-  local -a profiles=(volcano bailian blackai-gpt blackai-claude)
+  local -a profiles=(volcano bailian blackai-gpt blackai-claude jd)
 
   INSTALLED_TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/codex-install-test.XXXXXXXX")
   trap 'rm -rf -- "${INSTALLED_TEMP_DIR}"' EXIT
@@ -149,6 +150,7 @@ VOLCANO_MODELS="${VOLCANO_MODEL_CANDIDATES}"
 BAILIAN_MODELS='["glm-5.2","qwen3.7-plus"]'
 BLACKAI_GPT_MODELS='["gpt-5.6-sol"]'
 BLACKAI_CLAUDE_MODELS='["claude-sonnet-4-6"]'
+JD_MODELS='["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder"]'
 
 pass() {
   TEST_COUNT=$((TEST_COUNT + 1))
@@ -254,10 +256,11 @@ FAKE_NODE_RUNTIME
 }
 
 test_codex_profiles() {
-  local volcano blackai claude global_config
+  local volcano blackai claude jd global_config
   volcano=$(codex_profile volcano)
   blackai=$(codex_profile blackai-gpt)
   claude=$(codex_profile blackai-claude)
+  jd=$(codex_profile jd)
   grep -Fq 'model_provider = "volcano-ai-gateway"' <<<"${volcano}" ||
     fail "Volcano profile provider"
   grep -Fq 'deepseek-v4-pro' <<<"${volcano}" || fail "Volcano profile model catalog"
@@ -279,6 +282,12 @@ test_codex_profiles() {
     fail "BlackAI GPT profile disables unsupported web search tools"
   grep -Fq 'multi_agent = false' <<<"${claude}" ||
     fail "BlackAI Claude profile disables unsupported namespace tools"
+  grep -Fq 'model_provider = "jd-llm-gateway"' <<<"${jd}" ||
+    fail "JD profile provider"
+  grep -Fq 'GPT-5.6-Terra-joybuilder' <<<"${jd}" ||
+    fail "JD profile model catalog"
+  grep -Fq 'env_key = "JD_GATEWAY_API_KEY"' <<<"${jd}" ||
+    fail "JD profile token variable"
   # 验证全局配置
   write_codex_global_config
   global_config=$(<"${CODEX_DIR}/config.toml")
@@ -298,6 +307,10 @@ test_codex_profiles() {
     fail "Global Codex config missing BlackAI GPT token variable"
   grep -Fq '[model_providers.blackaicoding-claude]' <<<"${global_config}" ||
     fail "Global Codex config missing BlackAI Claude provider"
+  grep -Fq '[model_providers.jd-llm-gateway]' <<<"${global_config}" ||
+    fail "Global Codex config missing JD provider"
+  grep -Fq 'env_key = "JD_GATEWAY_API_KEY"' <<<"${global_config}" ||
+    fail "Global Codex config missing JD token variable"
   assert_file_mode 600 "${CODEX_DIR}/config.toml" "Global Codex config mode"
   pass "Codex profile rendering"
 }
@@ -310,8 +323,10 @@ test_codex_model_catalog() {
   chmod 700 "${NODE_INSTALL_DIR}/bin/codex"
 
   write_codex_profiles
+  local jd_catalog
   catalog=$(<"$(codex_model_catalog_file volcano)")
   gpt_catalog=$(<"$(codex_model_catalog_file blackai-gpt)")
+  jd_catalog=$(<"$(codex_model_catalog_file jd)")
   assert_json "${catalog}" \
     "[.models[].slug] | sort == (${VOLCANO_MODELS} | sort)" \
     "Volcano catalog contains only its token models"
@@ -324,6 +339,12 @@ test_codex_model_catalog() {
   assert_json "${gpt_catalog}" \
     '[.models[] | select(.slug == "deepseek-v4-pro")] | length == 0' \
     "GPT catalog excludes Volcano models"
+  assert_json "${jd_catalog}" \
+    "[.models[].slug] | sort == (${JD_MODELS} | sort)" \
+    "JD catalog contains only its token models"
+  assert_json "${jd_catalog}" \
+    '[.models[] | select(.slug == "GPT-5.6-Terra-joybuilder" and .context_window == 1000000)] | length == 1' \
+    "custom JD models use a large context window"
   assert_json "${catalog}" \
     '[.models[] | select(.slug == "deepseek-v4-flash" and .context_window == 1000000)] | length == 1' \
     "add custom model metadata"
@@ -476,7 +497,9 @@ test_ccr_config_builder() {
     'deepseek-v4-flash' \
     'deepseek-v4-pro' \
     'new-blackai-claude' \
-    '["claude-sonnet-4-6","claude-fable-5"]')
+    '["claude-sonnet-4-6","claude-fable-5"]' \
+    'new-jd' \
+    '["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder"]')
   assert_json "${config}" '.APIKEY == "new-local"' "set CCR local key"
   assert_json "${config}" '.gateway.port == 3456 and .gateway.corePort == 3457' "set CCR ports"
   assert_json "${config}" '[.Providers[] | select(.id == "custom")] | length == 1' "preserve custom provider"
@@ -484,6 +507,7 @@ test_ccr_config_builder() {
   assert_json "${config}" '[.Providers[] | select(.id == "volcano-ai-gateway")][0].models == ["deepseek-v4-flash","deepseek-v4-pro"]' "use discovered Volcano models"
   assert_json "${config}" '[.Providers[] | select(.id == "bailian")][0].models == ["qwen3.7-plus"]' "use discovered Bailian models"
   assert_json "${config}" '[.Providers[] | select(.id == "blackai-claude" and .apiKey == "new-blackai-claude")][0].models == ["claude-sonnet-4-6","claude-fable-5"]' "use discovered BlackAI Claude models"
+  assert_json "${config}" '[.Providers[] | select(.id == "jd-llm-gateway" and .apiKey == "new-jd")][0].models == ["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder"]' "use discovered JD models"
   assert_json "${config}" '.profile.profiles[] | select(.agent == "claude-code") | .opusModel == "火山AI网关/deepseek-v4-pro"' "update Claude profile"
   pass "CCR configuration rendering"
 }
@@ -504,6 +528,8 @@ test_ccr_config_from_empty_state() {
     '' \
     '' \
     '' \
+    '[]' \
+    '' \
     '[]')
   assert_json "${config}" '.profile | type == "object"' \
     "initialize missing CCR profile"
@@ -520,18 +546,24 @@ test_ccr_config_idempotence() {
   first=$(build_ccr_config "${response}" 'local' 'volcano' 'bailian' \
     '127.0.0.1' '3456' '3457' 'http://127.0.0.1:3456' \
     '["deepseek-v4-pro"]' '[]' 'deepseek-v4-pro' 'deepseek-v4-pro' \
-    'blackai-old' '["claude-fable-5"]')
+    'blackai-old' '["claude-fable-5"]' \
+    'jd-old' '["GPT-5.6-Terra-joybuilder"]')
   second=$(build_ccr_config \
     "$(jq -cn --argjson value "${first}" '{ok:true,value:$value}')" \
     '' '' '' '127.0.0.1' '3456' '3457' 'http://127.0.0.1:3456' \
     '["deepseek-v4-pro"]' '[]' 'deepseek-v4-pro' 'deepseek-v4-pro' \
-    '' '["claude-fable-5"]')
+    '' '["claude-fable-5"]' \
+    '' '["GPT-5.6-Terra-joybuilder"]')
   assert_json "${second}" '[.Providers[] | select(.id == "volcano-ai-gateway")] | length == 1' \
     "CCR rerun does not duplicate Volcano provider"
   assert_json "${second}" '[.Providers[] | select(.id == "blackai-claude")] | length == 1' \
     "CCR rerun does not duplicate BlackAI provider"
   assert_json "${second}" '[.Providers[] | select(.id == "blackai-claude")][0].apiKey == "blackai-old"' \
     "CCR rerun preserves BlackAI key"
+  assert_json "${second}" '[.Providers[] | select(.id == "jd-llm-gateway")] | length == 1' \
+    "CCR rerun does not duplicate JD provider"
+  assert_json "${second}" '[.Providers[] | select(.id == "jd-llm-gateway")][0].apiKey == "jd-old"' \
+    "CCR rerun preserves JD key"
   pass "CCR configuration idempotence"
 }
 
@@ -569,19 +601,23 @@ test_gateway_key_round_trip() {
   local original_volcano original_claude output
   DRY_RUN=0
   unset VOLCANO_AI_GATEWAY_API_KEY BAILIAN_API_KEY \
-    BLACKAICODING_GPT_API_KEY BLACKAICODING_CLAUDE_API_KEY
+    BLACKAICODING_GPT_API_KEY BLACKAICODING_CLAUDE_API_KEY JD_GATEWAY_API_KEY
   original_volcano='key with spaces $ and "quotes"'
   original_claude="key-with-'quote'"
+  original_jd='jd token with spaces'
   VOLCANO_AI_GATEWAY_API_KEY="${original_volcano}"
   BLACKAICODING_CLAUDE_API_KEY="${original_claude}"
-  export VOLCANO_AI_GATEWAY_API_KEY BLACKAICODING_CLAUDE_API_KEY
+  JD_GATEWAY_API_KEY="${original_jd}"
+  export VOLCANO_AI_GATEWAY_API_KEY BLACKAICODING_CLAUDE_API_KEY JD_GATEWAY_API_KEY
   output=$(write_codex_environment)
-  [[ "${output}" != *"${original_volcano}"* && "${output}" != *"${original_claude}"* ]] ||
+  [[ "${output}" != *"${original_volcano}"* && "${output}" != *"${original_claude}"* &&
+     "${output}" != *"${original_jd}"* ]] ||
     fail "gateway keys leaked to output"
-  unset VOLCANO_AI_GATEWAY_API_KEY BLACKAICODING_CLAUDE_API_KEY
+  unset VOLCANO_AI_GATEWAY_API_KEY BLACKAICODING_CLAUDE_API_KEY JD_GATEWAY_API_KEY
   load_persisted_gateway_keys
   assert_eq "${original_volcano}" "${VOLCANO_AI_GATEWAY_API_KEY}" "round-trip Volcano key"
   assert_eq "${original_claude}" "${BLACKAICODING_CLAUDE_API_KEY}" "round-trip Claude key"
+  assert_eq "${original_jd}" "${JD_GATEWAY_API_KEY}" "round-trip JD token"
   assert_file_mode 600 "${CODEX_ENV_FILE}" "gateway environment mode"
   ! grep -Fq "${original_volcano}" "${AGENT_BIN_DIR}/codex" || fail "launcher contains gateway key"
   pass "gateway key persistence"
@@ -726,12 +762,14 @@ test_codex_install_smoke() {
   BAILIAN_MODELS='["glm-5.2","qwen3.7-plus"]'
   BLACKAI_GPT_MODELS='["gpt-5.6-sol"]'
   BLACKAI_CLAUDE_MODELS='["claude-sonnet-4-6"]'
+  JD_MODELS='["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder"]'
   VOLCANO_AI_GATEWAY_API_KEY=test-volcano
   BAILIAN_API_KEY=test-bailian
   BLACKAICODING_GPT_API_KEY=test-blackai-gpt
   BLACKAICODING_CLAUDE_API_KEY=test-blackai-claude
+  JD_GATEWAY_API_KEY=test-jd
   export VOLCANO_AI_GATEWAY_API_KEY BAILIAN_API_KEY \
-    BLACKAICODING_GPT_API_KEY BLACKAICODING_CLAUDE_API_KEY
+    BLACKAICODING_GPT_API_KEY BLACKAICODING_CLAUDE_API_KEY JD_GATEWAY_API_KEY
   write_codex_environment >/dev/null
   write_codex_profiles
   output=$(AI_SETUP_AGENT_DIR="${AGENT_DIR}" bash "${TEST_SCRIPT_PATH}" \
@@ -933,6 +971,7 @@ test_completion_hint() {
   BAILIAN_MODELS='[]'
   BLACKAI_GPT_MODELS='["gpt-5.6-sol"]'
   BLACKAI_CLAUDE_MODELS='[]'
+  JD_MODELS='[]'
   output=$(print_completion_hints)
   grep -Fq 'codex --profile blackai-gpt' <<<"${output}" ||
     fail "completion configured profile hint"
