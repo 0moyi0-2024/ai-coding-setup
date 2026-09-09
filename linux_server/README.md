@@ -11,6 +11,7 @@ Claude Code、Codex、Claude Code Router（CCR）、Node.js、配置和缓存都
 ai-coding-setup/
 ├── README.md
 ├── set_claude_provider_keys.sh
+├── set_jd_gateway_config.sh
 ├── dsh_server/
 │   ├── start_dsh_service.sh
 │   └── README.md
@@ -196,6 +197,84 @@ codex -m '火山AI网关/deepseek-v4-pro'
 没有配置 token 的 profile 不会生成。需要使用 CCR 转发的火山模型时，请显式指定
 `火山AI网关/deepseek-v4-pro`；恢复历史会话时，全局配置可以识别已配置的 provider；
 如果需要严格使用某个 token 的独立模型目录，仍应带上对应的 `--profile`。
+
+## 只生成京东网关配置
+
+`set_jd_gateway_config.sh` 是独立脚本，只生成 JD LLM Gateway 的 Claude Code 和 Codex
+配置；它不安装 Node.js、Claude Code、Codex 或 CCR，也不读取或修改
+`set_claude_provider_keys.sh` 保存的火山、百炼和 BlackAI token。默认只探测 JD 网关
+下方列出的候选模型，不会使用火山网关的模型列表。
+
+### 运行方式
+
+在仓库的 `linux_server/` 目录中运行：
+
+```bash
+# 交互式输入 token，并生成独立文件，不覆盖现有 Claude/Codex 配置
+bash ./set_jd_gateway_config.sh --standalone
+
+# 非交互式生成独立文件
+bash ./set_jd_gateway_config.sh --standalone --token '<你的JD网关token>'
+
+# 通过环境变量提供 token
+JD_GATEWAY_TOKEN='<你的JD网关token>' bash ./set_jd_gateway_config.sh --standalone
+```
+
+`--standalone` 会在输出目录生成：
+
+```text
+claude-settings.json
+codex-config.toml
+```
+
+默认输出目录是当前用户的 `$HOME`；可用 `--output-dir /path/to/dir` 改变位置。确认文件
+内容后，再手动复制到实际使用的配置位置。
+
+### 输出模式
+
+```bash
+# 生成独立文件，不覆盖现有配置；推荐用于已有火山或其他网关配置的环境
+bash ./set_jd_gateway_config.sh --standalone
+
+# 只生成 JD 的 Claude 配置
+bash ./set_jd_gateway_config.sh --standalone --claude-only
+
+# 只生成 JD 的 Codex 配置
+bash ./set_jd_gateway_config.sh --standalone --codex-only
+
+# 只打印将要写入的 JSON/TOML，不写文件
+bash ./set_jd_gateway_config.sh --standalone --output-dir /tmp/jd-config --dry-run
+```
+
+不使用 `--standalone` 时，脚本会直接覆盖 `${OUTPUT_DIR}/.claude/settings.json` 和
+`${OUTPUT_DIR}/.codex/config.toml`。如果已有火山网关配置，请不要用默认模式；否则已有
+Claude/Codex 主配置会被替换。需要保留火山模型时，继续使用完整安装脚本的
+`volcano` profile 或 CCR 配置。
+
+### token 和权限
+
+默认使用 Codex 的 `env_key = "JD_GATEWAY_TOKEN"`，不会把 token 写入 `codex-config.toml`；
+运行 Codex 前需要设置：
+
+```bash
+export JD_GATEWAY_TOKEN='<你的JD网关token>'
+```
+
+如果明确选择 `--inline-token`，token 会写入 TOML。无论哪种方式，生成文件权限都是
+`600`。不要把 token 或生成文件内容粘贴到聊天、日志、工单或代码仓库中。
+
+### 模型探测
+
+脚本只探测以下 JD 候选模型：
+
+| 端点 | 候选模型 |
+| --- | --- |
+| Claude | `claude-opus-4-8[1m]`、`claude-opus-4-7[1m]`、`claude-sonnet-5[1m]` |
+| Codex | `GPT-5.6-Terra-joybuilder`、`GPT-5.6-Sol-joybuilder` |
+
+可用模型以当前 JD token 实际探测结果为准；探测失败的模型不会写入配置。全部失败时，
+脚本会降级使用全部候选并输出警告。网络不可达时可用 `--no-probe`，但之后需要自行确认
+模型确实可用。
 
 ## 查看脚本发现的模型
 
