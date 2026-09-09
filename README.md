@@ -90,7 +90,7 @@ sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh
 | `blackai-claude` | BlackAI Claude/Grok | Claude 和 Codex |
 | `jd` | JD LLM Gateway | Claude 和 Codex |
 
-安装或重新配置时，脚本会依次询问这些网关的可选 token；未配置的网关会被跳过。JD 网关对应 Codex 命令：
+安装或重新配置时，脚本会依次询问这些网关的可选 token；未配置的网关会被跳过。JD 网关的模型探测分为两条链路：Codex 模型（`GPT-5.6-*-joybuilder`）通过 OpenAI Responses 协议验证，Claude 模型通过 Anthropic Messages 协议验证。对应的 Codex 命令：
 
 ```bash
 codex --profile jd

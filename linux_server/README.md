@@ -167,6 +167,8 @@ claude
 
 进入 Claude Code 后，通过 `/model` 查看 CCR 从已配置 token 发现的模型并进行选择。
 火山、百炼、BlackAI Claude/Grok 和 JD 的模型会按 provider 分组显示。
+JD 网关的 Claude 模型使用 Anthropic Messages 协议（`/anthropic`），Codex 模型使用
+OpenAI Responses 协议（`/v1`），CCR 会把这两条链路拆分为独立 provider。
 
 查看 CCR 状态：
 
@@ -213,6 +215,8 @@ jq -r '.models[].slug' "/agent/config/codex/catalogs/jd.json"
 
 未配置的 provider 不会有对应 catalog 文件。`/models` 返回模型名称，只说明网关向
 该 token 公布了模型；最终是否完全兼容 Claude/Codex，需要以实际调用结果为准。
+JD 网关不依赖 `/models`：Codex 模型通过 `/v1/responses` 逐个验证，Claude 模型通过
+`/anthropic/v1/messages` 逐个验证，确保每个模型都已确认对该 token 可用。
 
 ## 以后如何重新运行
 

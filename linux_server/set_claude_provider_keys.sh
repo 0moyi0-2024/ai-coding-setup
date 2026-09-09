@@ -31,12 +31,14 @@ readonly CCR_SYSTEMD_UNIT="ai-coding-setup-ccr.service"
 readonly CCR_AUTOSTART_HELPER="${AGENT_BIN_DIR}/ccr-autostart"
 readonly CCR_PORT_SCAN_START="${AI_SETUP_CCR_PORT_SCAN_START:-3456}"
 readonly VOLCANO_MODEL_CANDIDATES='["deepseek-v4-flash","deepseek-v4-pro","qwen3.7-plus","qwen3.7-max","qwen3.8-flash","doubao-seed-2.1-pro","MiniMax-M3","glm-5.2","glm-5.3","glm-5.3-flash","hy3","kimi-k2.7-code"]'
-readonly JD_MODEL_CANDIDATES='["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder","claude-opus-4-8[1m]","claude-opus-4-7[1m]","claude-sonnet-5[1m]"]'
+readonly JD_MODEL_CANDIDATES='["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder"]'
+readonly JD_CLAUDE_MODEL_CANDIDATES='["claude-opus-4-8[1m]","claude-opus-4-7[1m]","claude-sonnet-5[1m]"]'
 VOLCANO_MODELS='[]'
 BAILIAN_MODELS='[]'
 BLACKAI_GPT_MODELS='[]'
 BLACKAI_CLAUDE_MODELS='[]'
 JD_MODELS='[]'
+JD_CLAUDE_MODELS='[]'
 TEMP_DIR=""
 readonly -a GATEWAY_KEY_NAMES=(
   VOLCANO_AI_GATEWAY_API_KEY
@@ -740,6 +742,49 @@ probe_responses_models() {
   log "${label}: token can use $(jq 'length' <<<"${verified_models}") verified model(s)"
 }
 
+probe_anthropic_models() {
+  local label=$1
+  local base_url=$2
+  local api_key=$3
+  local candidates=$4
+  local result_var=$5
+  local model payload status
+  local verified_models='[]'
+
+  if [[ -z "${api_key}" ]]; then
+    printf -v "${result_var}" '%s' '[]'
+    log "${label}: no token configured; no models will be listed"
+    return 0
+  fi
+
+  while IFS= read -r model; do
+    payload=$(jq -cn --arg model "${model}" \
+      '{model:$model,max_tokens:16,messages:[{role:"user",content:"Reply with OK."}]}')
+    status=$(curl --silent --show-error --max-time 60 --output /dev/null \
+      --write-out '%{http_code}' \
+      -H "Authorization: Bearer ${api_key}" \
+      -H 'anthropic-version: 2023-06-01' \
+      -H 'content-type: application/json' \
+      --data-binary "${payload}" "${base_url%/}/v1/messages" 2>/dev/null || true)
+    if [[ "${status}" =~ ^2[0-9][0-9]$ ]]; then
+      verified_models=$(jq -c --arg model "${model}" \
+        '. + [$model] | unique' <<<"${verified_models}")
+      log "${label}: ${model} is available"
+    else
+      log "${label}: ${model} is unavailable for this token (HTTP ${status:-request-failed})"
+    fi
+  done < <(jq -r '.[]' <<<"${candidates}")
+
+  if (( $(jq 'length' <<<"${verified_models}") == 0 )); then
+    printf -v "${result_var}" '%s' '[]'
+    warn "${label}: skipped (none of the configured candidate models are usable with this token)"
+    log "${label}: other configured gateways will continue to be used"
+    return 0
+  fi
+  printf -v "${result_var}" '%s' "${verified_models}"
+  log "${label}: token can use $(jq 'length' <<<"${verified_models}") verified Anthropic model(s)"
+}
+
 discover_configured_models() {
   if ((DRY_RUN)); then
     log 'Would discover the model list authorized by each configured token'
@@ -757,6 +802,8 @@ discover_configured_models() {
     "${BLACKAICODING_CLAUDE_API_KEY:-}" BLACKAI_CLAUDE_MODELS
   probe_responses_models 'JD LLM Gateway' 'http://llm-gw.jd.local/v1' \
     "${JD_GATEWAY_API_KEY:-}" "${JD_MODEL_CANDIDATES}" JD_MODELS
+  probe_anthropic_models 'JD LLM Gateway Claude' 'http://llm-gw.jd.local/anthropic' \
+    "${JD_GATEWAY_API_KEY:-}" "${JD_CLAUDE_MODEL_CANDIDATES}" JD_CLAUDE_MODELS
 }
 
 select_profile_model() {
@@ -814,11 +861,13 @@ augment_codex_model_catalog() {
              supports_image_detail_original:false,
              apply_patch_tool_type:"freeform",
              web_search_tool_type:"text_and_image",
-             context_window:(if ($slug | startswith("claude-")) then 200000
+             context_window:(if ($slug | endswith("[1m]")) then 1000000
+                             elif ($slug | startswith("claude-")) then 200000
                              elif ($slug | test("^(deepseek|qwen)")) then 1000000
                              elif ($slug | test("joybuilder$|sol$|terra$"; "i")) then 1000000
                              else 128000 end),
-             max_context_window:(if ($slug | startswith("claude-")) then 200000
+             max_context_window:(if ($slug | endswith("[1m]")) then 1000000
+                                 elif ($slug | startswith("claude-")) then 200000
                                  elif ($slug | test("^(deepseek|qwen)")) then 1000000
                                  elif ($slug | test("joybuilder$|sol$|terra$"; "i")) then 1000000
                                  else 128000 end),
@@ -902,21 +951,38 @@ codex_profile() {
       models=${JD_MODELS}
       model=$(select_profile_model "${models}" \
         'GPT-5.6-Terra-joybuilder' 'GPT-5.6-Sol-joybuilder')
-      note='# This profile requires the upstream gateway to support the Responses API.'
+      note='# This profile uses the JD OpenAI-compatible Responses endpoint; Claude models use the separate CCR Anthropic provider.'
+      model_reasoning='xhigh'
+      plan_mode_reasoning='max'
+      reasoning_summary='detailed'
+      verbosity='high'
+      web_search='live'
+      approval='on-request'
+      sandbox='workspace-write'
       ;;
     *) die "Unknown Codex profile: ${profile}" ;;
   esac
   [[ -n "${model}" ]] || die "No token-authorized models are available for profile ${profile}."
+  local reasoning_line='model_reasoning_effort = "high"'
+  local extra_lines=''
+  if [[ -n "${model_reasoning:-}" ]]; then
+    reasoning_line="model_reasoning_effort = \"${model_reasoning}\""
+    extra_lines+=$'\n'"plan_mode_reasoning_effort = \"${plan_mode_reasoning}\""
+    extra_lines+=$'\n'"model_reasoning_summary = \"${reasoning_summary}\""
+    extra_lines+=$'\n'"model_verbosity = \"${verbosity}\""
+  fi
   printf '%s\n' '# Managed by set_claude_provider_keys.sh.' "${note}" \
     "model = \"${model}\"" "model_provider = \"${provider}\"" \
     "model_catalog_json = \"$(codex_model_catalog_file "${profile}")\"" \
-    'model_reasoning_effort = "high"' \
-    'approval_policy = "never"' \
-    'sandbox_mode = "danger-full-access"' 'web_search = "disabled"' \
+    "${reasoning_line}" \
+    "approval_policy = \"${approval:-never}\"" \
+    "sandbox_mode = \"${sandbox:-danger-full-access}\"" \
+    "web_search = \"${web_search:-disabled}\"" \
+    '' "${extra_lines}" \
     '' "[model_providers.${provider}]" \
     "name = \"${name}\"" "base_url = \"${base_url}\"" \
     "env_key = \"${env_key}\"" 'wire_api = "responses"' "models = ${models}" \
-    '' '[features]' 'multi_agent = false' ''
+    '[features]' 'multi_agent = false' ''
 }
 
 profile_model_list() {
@@ -1181,6 +1247,8 @@ build_ccr_config() {
   local blackai_claude_models=${14:-'[]'}
   local jd_key=${15:-}
   local jd_models=${16:-'[]'}
+  local jd_claude_key=${17:-}
+  local jd_claude_models=${18:-'[]'}
 
   jq \
     --arg local_key "${local_key}" \
@@ -1198,6 +1266,8 @@ build_ccr_config() {
     --argjson blackai_claude_models "${blackai_claude_models}" \
     --arg jd_key "${jd_key}" \
     --argjson jd_models "${jd_models}" \
+    --arg jd_claude_key "${jd_claude_key}" \
+    --argjson jd_claude_models "${jd_claude_models}" \
     --arg claude_settings_file "${CLAUDE_SETTINGS_FILE}" \
     --arg codex_home "${CODEX_DIR}" \
     '.value as $cfg
@@ -1207,10 +1277,12 @@ build_ccr_config() {
      | ([$cfg.Providers[]? | select(.id == "xiyu" or .name == "蓝区稀宇")][0].apiKey // "") as $old_xiyu
      | ([$cfg.Providers[]? | select(.id == "blackai-claude" or .name == "BlackAI Claude")][0].apiKey // "") as $old_blackai_claude
      | ([$cfg.Providers[]? | select(.id == "jd-llm-gateway" or .name == "JD LLM Gateway")][0].apiKey // "") as $old_jd
+     | ([$cfg.Providers[]? | select(.id == "jd-llm-gateway-claude" or .name == "JD LLM Gateway Claude")][0].apiKey // "") as $old_jd_claude
      | (if $volcano_key != "" then $volcano_key else $old_volcano end) as $volcano
      | (if $bailian_key != "" then $bailian_key else $old_bailian end) as $bailian
      | (if $blackai_claude_key != "" then $blackai_claude_key else $old_blackai_claude end) as $blackai_claude
      | (if $jd_key != "" then $jd_key else $old_jd end) as $jd
+     | (if $jd_claude_key != "" then $jd_claude_key else $old_jd_claude end) as $jd_claude
      | ($cfg // {})
      | .profile = (.profile // {})
      | .profile.profiles = (.profile.profiles // [])
@@ -1231,7 +1303,8 @@ build_ccr_config() {
            (.id != "zhipu" and .name != "蓝区智谱") and
            (.id != "xiyu" and .name != "蓝区稀宇") and
            (.id != "blackai-claude" and .name != "BlackAI Claude") and
-           (.id != "jd-llm-gateway" and .name != "JD LLM Gateway")
+           (.id != "jd-llm-gateway" and .name != "JD LLM Gateway") and
+           (.id != "jd-llm-gateway-claude" and .name != "JD LLM Gateway Claude")
          )] +
          [{
            id:"volcano-ai-gateway", name:"火山AI网关",
@@ -1258,6 +1331,12 @@ build_ccr_config() {
            apiKey:$jd, type:"openai_chat_completions",
            models:$jd_models
          },{
+           id:"jd-llm-gateway-claude", name:"JD LLM Gateway Claude",
+           enabled:($jd_claude != "" and ($jd_claude_models | length) > 0),
+           baseUrl:"http://llm-gw.jd.local/anthropic",
+           apiKey:$jd_claude, type:"anthropic_messages",
+           models:$jd_claude_models
+         },{
            id:"zhipu", name:"蓝区智谱", enabled:false,
            baseUrl:"https://open.bigmodel.cn/api/paas/v4",
            apiKey:$old_zhipu, type:"openai_chat_completions",
@@ -1271,6 +1350,7 @@ build_ccr_config() {
      | .preferredProvider = (if $volcano_fast_model != "" then "火山AI网关"
                              elif ($bailian_models | length) > 0 then "蓝区百炼"
                              elif ($jd_models | length) > 0 then "JD LLM Gateway"
+                             elif ($jd_claude_models | length) > 0 then "JD LLM Gateway Claude"
                              else (.preferredProvider // "") end)
      | if $volcano_fast_model != "" then
          .profile.claudeCode.model = ("火山AI网关/" + $volcano_fast_model)
@@ -1336,7 +1416,9 @@ configure_ccr() {
     "${BLACKAICODING_CLAUDE_API_KEY:-}" \
     "${BLACKAI_CLAUDE_MODELS}" \
     "${JD_GATEWAY_API_KEY:-}" \
-    "${JD_MODELS}")
+    "${JD_MODELS}" \
+    "${JD_GATEWAY_API_KEY:-}" \
+    "${JD_CLAUDE_MODELS}")
   save_ccr_config "${config}"
 
   restart_ccr_gateway
@@ -1528,7 +1610,8 @@ configure_gateways_phase() {
         "${BAILIAN_MODELS}" == "[]" && \
         "${BLACKAI_GPT_MODELS}" == "[]" && \
         "${BLACKAI_CLAUDE_MODELS}" == "[]" && \
-        "${JD_MODELS}" == "[]" ]]; then
+        "${JD_MODELS}" == "[]" && \
+        "${JD_CLAUDE_MODELS}" == "[]" ]]; then
     die 'No gateway returned a usable model list; refusing to overwrite the working client/CCR configuration.'
   fi
   write_codex_profiles

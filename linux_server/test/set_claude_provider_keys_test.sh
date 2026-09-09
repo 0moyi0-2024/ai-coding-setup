@@ -54,6 +54,7 @@ run_installed_codex_test() {
   local profile profile_file catalog_file env_key expected_models
   local rendered_catalog actual_models profile_stderr catalog_stderr
   local -a profiles=(volcano bailian blackai-gpt blackai-claude jd)
+  # JD intentionally has two separate model chains; this smoke test verifies its Codex chain.
 
   INSTALLED_TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/codex-install-test.XXXXXXXX")
   trap 'rm -rf -- "${INSTALLED_TEMP_DIR}"' EXIT
@@ -149,8 +150,9 @@ source "${SCRIPT_PATH}"
 VOLCANO_MODELS="${VOLCANO_MODEL_CANDIDATES}"
 BAILIAN_MODELS='["glm-5.2","qwen3.7-plus"]'
 BLACKAI_GPT_MODELS='["gpt-5.6-sol"]'
-BLACKAI_CLAUDE_MODELS='["claude-sonnet-4-6"]'
-JD_MODELS='["GPT-5.6-Terra-joybuilder","claude-sonnet-5[1m]"]'
+  BLACKAI_CLAUDE_MODELS='["claude-sonnet-4-6"]'
+  JD_MODELS='["GPT-5.6-Terra-joybuilder"]'
+  JD_CLAUDE_MODELS='["claude-sonnet-5[1m]"]'
 
 pass() {
   TEST_COUNT=$((TEST_COUNT + 1))
@@ -343,6 +345,9 @@ test_codex_model_catalog() {
     "[.models[].slug] | sort == (${JD_MODELS} | sort)" \
     "JD catalog contains only its token models"
   assert_json "${jd_catalog}" \
+    'all(.models[]; (.slug | endswith("[1m]")) | not)' \
+    "JD Codex catalog excludes Anthropic-only models"
+  assert_json "${jd_catalog}" \
     '[.models[] | select(.slug == "GPT-5.6-Terra-joybuilder" and .context_window == 1000000)] | length == 1' \
     "custom JD models use a large context window"
   assert_json "${catalog}" \
@@ -460,6 +465,17 @@ test_volcano_probe_failure() {
   pass "Volcano probe failure handling"
 }
 
+test_jd_anthropic_probe() {
+  local models
+  models='not-empty'
+  curl() { printf '500'; }
+  probe_anthropic_models 'failed JD Claude' 'https://example.invalid/anthropic' 'test-key' \
+    "${JD_CLAUDE_MODEL_CANDIDATES}" models >/dev/null 2>&1
+  assert_eq '[]' "${models}" "all failed JD Anthropic probes are skipped"
+  unset -f curl
+  pass "JD Anthropic probe failure handling"
+}
+
 test_claude_settings_builder() {
   local settings
   settings=$(build_claude_settings \
@@ -499,7 +515,9 @@ test_ccr_config_builder() {
     'new-blackai-claude' \
     '["claude-sonnet-4-6","claude-fable-5"]' \
     'new-jd' \
-    '["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder"]')
+    '["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder"]' \
+    'new-jd' \
+    '["claude-opus-4-8[1m]"]')
   assert_json "${config}" '.APIKEY == "new-local"' "set CCR local key"
   assert_json "${config}" '.gateway.port == 3456 and .gateway.corePort == 3457' "set CCR ports"
   assert_json "${config}" '[.Providers[] | select(.id == "custom")] | length == 1' "preserve custom provider"
@@ -508,6 +526,8 @@ test_ccr_config_builder() {
   assert_json "${config}" '[.Providers[] | select(.id == "bailian")][0].models == ["qwen3.7-plus"]' "use discovered Bailian models"
   assert_json "${config}" '[.Providers[] | select(.id == "blackai-claude" and .apiKey == "new-blackai-claude")][0].models == ["claude-sonnet-4-6","claude-fable-5"]' "use discovered BlackAI Claude models"
   assert_json "${config}" '[.Providers[] | select(.id == "jd-llm-gateway" and .apiKey == "new-jd")][0].models == ["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder"]' "use discovered JD models"
+  assert_json "${config}" '[.Providers[] | select(.id == "jd-llm-gateway-claude" and .apiKey == "new-jd")][0].baseUrl == "http://llm-gw.jd.local/anthropic"' "set JD Anthropic endpoint"
+  assert_json "${config}" '[.Providers[] | select(.id == "jd-llm-gateway-claude")][0].type == "anthropic_messages"' "set JD Anthropic protocol"
   assert_json "${config}" '.profile.profiles[] | select(.agent == "claude-code") | .opusModel == "火山AI网关/deepseek-v4-pro"' "update Claude profile"
   pass "CCR configuration rendering"
 }
@@ -547,13 +567,15 @@ test_ccr_config_idempotence() {
     '127.0.0.1' '3456' '3457' 'http://127.0.0.1:3456' \
     '["deepseek-v4-pro"]' '[]' 'deepseek-v4-pro' 'deepseek-v4-pro' \
     'blackai-old' '["claude-fable-5"]' \
-    'jd-old' '["GPT-5.6-Terra-joybuilder"]')
+    'jd-old' '["GPT-5.6-Terra-joybuilder"]' \
+    'jd-claude-old' '["claude-opus-4-8[1m]"]')
   second=$(build_ccr_config \
     "$(jq -cn --argjson value "${first}" '{ok:true,value:$value}')" \
     '' '' '' '127.0.0.1' '3456' '3457' 'http://127.0.0.1:3456' \
     '["deepseek-v4-pro"]' '[]' 'deepseek-v4-pro' 'deepseek-v4-pro' \
     '' '["claude-fable-5"]' \
-    '' '["GPT-5.6-Terra-joybuilder"]')
+    '' '["GPT-5.6-Terra-joybuilder"]' \
+    '' '["claude-opus-4-8[1m]"]')
   assert_json "${second}" '[.Providers[] | select(.id == "volcano-ai-gateway")] | length == 1' \
     "CCR rerun does not duplicate Volcano provider"
   assert_json "${second}" '[.Providers[] | select(.id == "blackai-claude")] | length == 1' \
@@ -564,6 +586,10 @@ test_ccr_config_idempotence() {
     "CCR rerun does not duplicate JD provider"
   assert_json "${second}" '[.Providers[] | select(.id == "jd-llm-gateway")][0].apiKey == "jd-old"' \
     "CCR rerun preserves JD key"
+  assert_json "${second}" '[.Providers[] | select(.id == "jd-llm-gateway-claude")] | length == 1' \
+    "CCR rerun does not duplicate JD Anthropic provider"
+  assert_json "${second}" '[.Providers[] | select(.id == "jd-llm-gateway-claude")][0].apiKey == "jd-claude-old"' \
+    "CCR rerun preserves JD Anthropic key"
   pass "CCR configuration idempotence"
 }
 
@@ -762,7 +788,8 @@ test_codex_install_smoke() {
   BAILIAN_MODELS='["glm-5.2","qwen3.7-plus"]'
   BLACKAI_GPT_MODELS='["gpt-5.6-sol"]'
   BLACKAI_CLAUDE_MODELS='["claude-sonnet-4-6"]'
-  JD_MODELS='["GPT-5.6-Terra-joybuilder","claude-sonnet-5[1m]"]'
+  JD_MODELS='["GPT-5.6-Terra-joybuilder"]'
+JD_CLAUDE_MODELS='["claude-sonnet-5[1m]"]'
   VOLCANO_AI_GATEWAY_API_KEY=test-volcano
   BAILIAN_API_KEY=test-bailian
   BLACKAICODING_GPT_API_KEY=test-blackai-gpt
@@ -995,6 +1022,7 @@ test_token_model_discovery
 test_model_discovery_failures
 test_volcano_model_probe
 test_volcano_probe_failure
+test_jd_anthropic_probe
 test_claude_settings_builder
 test_ccr_config_builder
 test_ccr_config_from_empty_state
