@@ -31,6 +31,7 @@ readonly CCR_SYSTEMD_UNIT="ai-coding-setup-ccr.service"
 readonly CCR_AUTOSTART_HELPER="${AGENT_BIN_DIR}/ccr-autostart"
 readonly CCR_PORT_SCAN_START="${AI_SETUP_CCR_PORT_SCAN_START:-3456}"
 readonly VOLCANO_MODEL_CANDIDATES='["deepseek-v4-flash","deepseek-v4-pro","qwen3.7-plus","qwen3.7-max","qwen3.8-flash","doubao-seed-2.1-pro","MiniMax-M3","glm-5.2","glm-5.3","glm-5.3-flash","hy3","kimi-k2.7-code"]'
+readonly JD_MODEL_CANDIDATES='["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder","claude-opus-4-8[1m]","claude-opus-4-7[1m]","claude-sonnet-5[1m]"]'
 VOLCANO_MODELS='[]'
 BAILIAN_MODELS='[]'
 BLACKAI_GPT_MODELS='[]'
@@ -754,8 +755,8 @@ discover_configured_models() {
     "${BLACKAICODING_GPT_API_KEY:-}" BLACKAI_GPT_MODELS
   discover_token_models 'BlackAI Claude' 'https://www.blackaicoding.com/v1' \
     "${BLACKAICODING_CLAUDE_API_KEY:-}" BLACKAI_CLAUDE_MODELS
-  discover_token_models 'JD LLM Gateway' 'http://llm-gw.jd.local/v1' \
-    "${JD_GATEWAY_API_KEY:-}" JD_MODELS
+  probe_responses_models 'JD LLM Gateway' 'http://llm-gw.jd.local/v1' \
+    "${JD_GATEWAY_API_KEY:-}" "${JD_MODEL_CANDIDATES}" JD_MODELS
 }
 
 select_profile_model() {

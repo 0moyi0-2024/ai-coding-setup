@@ -150,7 +150,7 @@ VOLCANO_MODELS="${VOLCANO_MODEL_CANDIDATES}"
 BAILIAN_MODELS='["glm-5.2","qwen3.7-plus"]'
 BLACKAI_GPT_MODELS='["gpt-5.6-sol"]'
 BLACKAI_CLAUDE_MODELS='["claude-sonnet-4-6"]'
-JD_MODELS='["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder"]'
+JD_MODELS='["GPT-5.6-Terra-joybuilder","claude-sonnet-5[1m]"]'
 
 pass() {
   TEST_COUNT=$((TEST_COUNT + 1))
@@ -762,7 +762,7 @@ test_codex_install_smoke() {
   BAILIAN_MODELS='["glm-5.2","qwen3.7-plus"]'
   BLACKAI_GPT_MODELS='["gpt-5.6-sol"]'
   BLACKAI_CLAUDE_MODELS='["claude-sonnet-4-6"]'
-  JD_MODELS='["GPT-5.6-Terra-joybuilder","GPT-5.6-Sol-joybuilder"]'
+  JD_MODELS='["GPT-5.6-Terra-joybuilder","claude-sonnet-5[1m]"]'
   VOLCANO_AI_GATEWAY_API_KEY=test-volcano
   BAILIAN_API_KEY=test-bailian
   BLACKAICODING_GPT_API_KEY=test-blackai-gpt
