@@ -219,11 +219,12 @@ bash ./set_jd_gateway_config.sh --merge
 - 同时生成 JD 独立模型 catalog：`$CODEX_HOME/catalogs/jd.json`；模型列表只包含探测成功
   的 JD 模型，不会继承全局配置里的火山模型。
 - 现有 `$CODEX_HOME/config.toml` 不会被修改。
-- 脚本会把 token 保存到 `$CODEX_HOME/jd.env`（权限 `600`），并让后续 Codex 会话自动
-  加载；当前已打开的 shell 需要执行一次：
+- 脚本会把 token 保存到 `$CODEX_HOME/jd.env`（权限 `600`），并把自动加载配置追加到
+  `/agent/env.sh`；普通 Linux 环境追加到 `~/.bashrc` 或 `~/.zshrc`。当前已打开的
+  安装器 shell 需要执行一次：
 
   ```bash
-  source "$CODEX_HOME/jd.env"
+  source /agent/env.sh
   ```
 
 - 之后启动 JD 网关：
@@ -266,9 +267,9 @@ bash ./set_jd_gateway_config.sh --merge --dry-run
 
 默认使用 Codex 的 `env_key = "JD_GATEWAY_TOKEN"`，不会把 token 写入 `jd.config.toml`。
 `--merge` 或默认模式会把 token 保存到专用环境文件 `$CODEX_HOME/jd.env`，权限为 `600`，
-并自动追加 source 配置；安装器环境追加到 `gateways.env`，普通环境追加到 `~/.bashrc` /
-`~/.zshrc`。交互输入 token 后通常不需要再手动 `export`。当前已打开的 shell 需要执行
-一次 `source "$CODEX_HOME/jd.env"`。
+并自动追加 source 配置；安装器环境追加到 `/agent/env.sh`，普通环境追加到 `~/.bashrc` /
+`~/.zshrc`。交互输入 token 后通常不需要再手动 `export`。当前已打开的安装器 shell 需要
+执行一次 `source /agent/env.sh`。
 
 如果明确选择 `--inline-token`，token 会写入 TOML。选择 `--no-save-token` 时不保存
 token 环境文件，也不修改 shell 配置。无论哪种方式，生成配置和 token 文件权限都是

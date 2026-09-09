@@ -506,11 +506,11 @@ save_codex_token() {
   mv -f "${tmp}" "${env_file}"
   log "已保存 JD token 环境文件 ${env_file} (mode 600)"
 
-  # 安装器环境的 codex 启动器会 source gateways.env；这里让它自动加载 JD token。
-  # 显式 --output-dir 通常是打包/预览目录，不要改当前用户的 shell 配置。
-  if (( ! OUTPUT_DIR_SET )) && [[ "${env_file}" == "/agent/config/codex/jd.env" && -f "/agent/config/codex/gateways.env" ]]; then
-    upsert_source_block "/agent/config/codex/gateways.env" "${env_file}"
-    log 'Codex 启动器将在新会话自动加载 JD token'
+  # 安装器环境统一追加到 /agent/env.sh，和原工具链的加载方式保持一致。
+  # 显式 --output-dir 通常是打包/预览目录，不要修改公共 shell 配置。
+  if (( ! OUTPUT_DIR_SET )) && [[ "${env_file}" == "/agent/config/codex/jd.env" && -f "/agent/env.sh" ]]; then
+    upsert_source_block "/agent/env.sh" "${env_file}"
+    log '已追加到 /agent/env.sh；新会话会自动加载 JD token'
   elif (( ! OUTPUT_DIR_SET )); then
     for rc_file in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
       [[ -f "${rc_file}" ]] || continue
@@ -521,7 +521,7 @@ save_codex_token() {
     log "预览目录模式不会修改 shell 配置；使用前请手动 source ${env_file}"
   fi
 
-  log '当前已打开的 shell 需要执行一次: source "'"${env_file}"'"'
+  log '当前已打开的 shell 需要执行一次: source /agent/env.sh'
 }
 
 write_file() {
