@@ -16,6 +16,7 @@ set -Eeuo pipefail
 #   --output-dir <dir>    输出目录（默认 $HOME，生成 ~/.claude/settings.json 和 ~/.codex/config.toml）
 #   --standalone          生成独立文件（不写入 ~/.claude ~/.codex，而是输出到 output-dir 下的
 #                         claude-settings.json 和 codex-config.toml，方便手动复制）
+#   --merge               一键追加到已有配置：Codex 生成 jd.config.toml，Claude 合并 settings.json 并自动备份
 #   --claude-only         只生成 Claude Code 配置
 #   --codex-only          只生成 Codex 配置
 #   --no-probe            跳过模型探测，直接使用全部候选模型
@@ -45,13 +46,14 @@ CODEX_SUBAGENT_MODEL='GPT-5.6-Sol-joybuilder'
 TOKEN=''
 OUTPUT_DIR="${HOME}"
 STANDALONE=0
+MERGE=0
 CLAUDE_ONLY=0
 CODEX_ONLY=0
 NO_PROBE=0
 INLINE_TOKEN=0
 DRY_RUN=0
 
-log() { printf '[jd-setup] %s\n' "$*"; }
+log() { printf '[jd-setup] %s\n' "$*" >&2; }
 warn() { printf '[jd-setup] WARNING: %s\n' "$*" >&2; }
 die() { printf '[jd-setup] ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -65,6 +67,8 @@ usage() {
   --token <token>       直接指定 JD 网关 token（也可以通过 JD_GATEWAY_TOKEN 环境变量提供）
   --output-dir <dir>    输出目录（默认 \$HOME）
   --standalone          生成独立文件到 output-dir 下（不覆盖 ~/.claude ~/.codex）
+  --merge               追加到已有配置：Codex 写入 .codex/jd.config.toml；Claude 合并到
+                        .claude/settings.json，并自动创建 .bak.<时间戳> 备份
   --claude-only         只生成 Claude Code 配置
   --codex-only          只生成 Codex 配置
   --no-probe            跳过模型探测，直接使用全部候选模型
@@ -74,7 +78,11 @@ usage() {
 
 生成的文件:
   默认模式:     \${output_dir}/.claude/settings.json + \${output_dir}/.codex/config.toml
+  --merge:      合并 \${output_dir}/.claude/settings.json + 写入 \${output_dir}/.codex/jd.config.toml
   --standalone: \${output_dir}/claude-settings.json + \${output_dir}/codex-config.toml
+
+Codex 追加模式不会修改现有 config.toml；之后使用:
+  codex --profile jd
 USAGE
 }
 
@@ -93,6 +101,10 @@ parse_args() {
         ;;
       --standalone)
         STANDALONE=1
+        shift
+        ;;
+      --merge)
+        MERGE=1
         shift
         ;;
       --claude-only)
@@ -150,6 +162,8 @@ prompt_token() {
 claude_settings_path() {
   if ((STANDALONE)); then
     printf '%s/claude-settings.json' "${OUTPUT_DIR}"
+  elif [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+    printf '%s/settings.json' "${CLAUDE_CONFIG_DIR%/}"
   else
     printf '%s/.claude/settings.json' "${OUTPUT_DIR}"
   fi
@@ -158,6 +172,15 @@ claude_settings_path() {
 codex_config_path() {
   if ((STANDALONE)); then
     printf '%s/codex-config.toml' "${OUTPUT_DIR}"
+  elif [[ -n "${CODEX_HOME:-}" ]]; then
+    if ((MERGE)); then
+      # Codex 支持独立 profile 文件；不碰已有 config.toml。
+      printf '%s/jd.config.toml' "${CODEX_HOME%/}"
+    else
+      printf '%s/config.toml' "${CODEX_HOME%/}"
+    fi
+  elif ((MERGE)); then
+    printf '%s/.codex/jd.config.toml' "${OUTPUT_DIR}"
   else
     printf '%s/.codex/config.toml' "${OUTPUT_DIR}"
   fi
@@ -275,11 +298,6 @@ build_codex_config() {
   local -a models=("$@")
   local model
   model="${models[0]}"
-  local model_list
-  model_list=$(printf '%s\n' "${models[@]}" | jq -R . | jq -s -c .)
-  local model_list_toml
-  model_list_toml=$(printf '%s\n' "${models[@]}" | sed 's/^/  "/;s/$/",/' | sed '$ s/,$//')
-  # Simpler: just hardcode the list as TOML array
   local toml_models=''
   local first=1
   for m in "${models[@]}"; do
@@ -353,6 +371,28 @@ exclude = [
 TOML_EOF
 }
 
+merge_claude_settings() {
+  local path=$1
+  local new_content=$2
+  local dir backup
+  dir=$(dirname "${path}")
+  mkdir -p "${dir}"
+
+  if [[ ! -f "${path}" ]]; then
+    printf '%s\n' "${new_content}"
+    return 0
+  fi
+
+  if ((DRY_RUN)); then
+    log "[dry-run] 将合并到 ${path}（实际运行时会先备份）"
+  else
+    backup="${path}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp -p "${path}" "${backup}"
+    log "已备份 Claude 配置到 ${backup}"
+  fi
+  jq -S -s '.[0] * .[1]' "${path}" <(printf '%s\n' "${new_content}")
+}
+
 write_file() {
   local path=$1
   local content=$2
@@ -375,6 +415,7 @@ write_file() {
 
 main() {
   parse_args "$@"
+  (( STANDALONE ^ MERGE )) || die "--standalone 和 --merge 只能选择一个；不使用它们时将覆盖主配置"
   require_command jq
   require_command curl
   prompt_token
@@ -398,7 +439,14 @@ main() {
     claude_path=$(claude_settings_path)
     local claude_content
     claude_content=$(build_claude_settings "${claude_models[@]}")
-    write_file "${claude_path}" "${claude_content}" 600
+
+    if ((MERGE)); then
+      local merged_content
+      merged_content=$(merge_claude_settings "${claude_path}" "${claude_content}")
+      write_file "${claude_path}" "${merged_content}" 600
+    else
+      write_file "${claude_path}" "${claude_content}" 600
+    fi
   fi
 
   if (( ! CLAUDE_ONLY )); then
@@ -407,6 +455,12 @@ main() {
     local codex_content
     codex_content=$(build_codex_config "${codex_models[@]}")
     write_file "${codex_path}" "${codex_content}" 600
+
+    if ((MERGE)); then
+      log '现有 Codex config.toml 未修改；JD 网关请使用: codex --profile jd'
+    elif (( ! STANDALONE )); then
+      log 'JD 已写入 Codex 主配置；启动命令: codex'
+    fi
 
     if (( ! INLINE_TOKEN )); then
       cat <<HINT
@@ -420,5 +474,4 @@ HINT
 
   log '完成。'
 }
-
 main "$@"

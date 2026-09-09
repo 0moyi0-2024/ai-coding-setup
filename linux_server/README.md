@@ -205,55 +205,56 @@ codex -m '火山AI网关/deepseek-v4-pro'
 `set_claude_provider_keys.sh` 保存的火山、百炼和 BlackAI token。默认只探测 JD 网关
 下方列出的候选模型，不会使用火山网关的模型列表。
 
-### 运行方式
+### 一键追加到已有配置（推荐）
 
-在仓库的 `linux_server/` 目录中运行：
-
-```bash
-# 交互式输入 token，并生成独立文件，不覆盖现有 Claude/Codex 配置
-bash ./set_jd_gateway_config.sh --standalone
-
-# 非交互式生成独立文件
-bash ./set_jd_gateway_config.sh --standalone --token '<你的JD网关token>'
-
-# 通过环境变量提供 token
-JD_GATEWAY_TOKEN='<你的JD网关token>' bash ./set_jd_gateway_config.sh --standalone
-```
-
-`--standalone` 会在输出目录生成：
-
-```text
-claude-settings.json
-codex-config.toml
-```
-
-默认输出目录是当前用户的 `$HOME`；可用 `--output-dir /path/to/dir` 改变位置。确认文件
-内容后，再手动复制到实际使用的配置位置。
-
-### 输出模式
+已有火山或其他网关配置时，使用 `--merge`：
 
 ```bash
-# 生成独立文件，不覆盖现有配置；推荐用于已有火山或其他网关配置的环境
-bash ./set_jd_gateway_config.sh --standalone
+bash ./set_jd_gateway_config.sh --merge
+```
 
-# 只生成 JD 的 Claude 配置
-bash ./set_jd_gateway_config.sh --standalone --claude-only
+- Codex 会生成独立 profile 文件：`$CODEX_HOME/jd.config.toml`；未设置 `CODEX_HOME`
+  时写入 `~/.codex/jd.config.toml`。
+- 现有 `$CODEX_HOME/config.toml` 不会被修改。
+- 之后启动 JD 网关：
 
-# 只生成 JD 的 Codex 配置
+  ```bash
+  export JD_GATEWAY_TOKEN='<你的JD网关token>'
+  codex --profile jd
+  ```
+
+- Claude Code 会把 JD 必需字段合并进 `$CLAUDE_CONFIG_DIR/settings.json`；未设置
+  `CLAUDE_CONFIG_DIR` 时合并到 `~/.claude/settings.json`。原有其他字段会保留，冲突
+  字段以 JD 为准；实际修改前会自动创建 `settings.json.bak.<时间戳>` 备份。
+- 这个脚本不支持 Claude Code 的多 profile 主配置切换。如果需要继续使用火山 Claude
+  配置，请先备份或不要用本脚本合并 Claude 配置；也可以改用 `--codex-only --merge`
+  只追加 Codex profile：
+
+  ```bash
+  bash ./set_jd_gateway_config.sh --codex-only --merge
+  ```
+
+### 其他模式
+
+```bash
+# 生成独立文件，不写入现有配置目录
+bash ./set_jd_gateway_config.sh --standalone --output-dir "$HOME/jd-config"
+
+# 只生成 Codex 独立配置
 bash ./set_jd_gateway_config.sh --standalone --codex-only
 
 # 只打印将要写入的 JSON/TOML，不写文件
-bash ./set_jd_gateway_config.sh --standalone --output-dir /tmp/jd-config --dry-run
+bash ./set_jd_gateway_config.sh --merge --dry-run
 ```
 
-不使用 `--standalone` 时，脚本会直接覆盖 `${OUTPUT_DIR}/.claude/settings.json` 和
-`${OUTPUT_DIR}/.codex/config.toml`。如果已有火山网关配置，请不要用默认模式；否则已有
-Claude/Codex 主配置会被替换。需要保留火山模型时，继续使用完整安装脚本的
-`volcano` profile 或 CCR 配置。
+`--standalone` 会在输出目录生成 `claude-settings.json` 和 `codex-config.toml`。
+`--merge` 和 `--standalone` 不能同时使用。两者都不使用时，脚本会写入主配置
+`~/.claude/settings.json` 和 `$CODEX_HOME/config.toml`（或 `~/.codex/config.toml`），
+这会覆盖已有配置；不要在已有火山配置的环境中使用这种默认模式。
 
 ### token 和权限
 
-默认使用 Codex 的 `env_key = "JD_GATEWAY_TOKEN"`，不会把 token 写入 `codex-config.toml`；
+默认使用 Codex 的 `env_key = "JD_GATEWAY_TOKEN"`，不会把 token 写入 `jd.config.toml`；
 运行 Codex 前需要设置：
 
 ```bash
