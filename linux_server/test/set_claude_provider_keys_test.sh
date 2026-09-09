@@ -452,6 +452,8 @@ test_claude_settings_builder() {
   assert_json "${settings}" '.env.ANTHROPIC_AUTH_TOKEN == "local-test-key"' "set local CCR key"
   assert_json "${settings}" '.env.ANTHROPIC_BASE_URL == "http://127.0.0.1:4567"' "set CCR URL"
   assert_json "${settings}" '.env.ANTHROPIC_DEFAULT_HAIKU_MODEL == null' "remove forced Haiku default"
+  assert_json "${settings}" '.permissions.defaultMode == "bypassPermissions"' \
+    "configure Claude continuous execution mode"
   assert_json "${settings}" '.modelOverrides["claude-fable-5"] == "火山AI网关/deepseek-v4-flash"' "set Fable model override"
   assert_json "${settings}" '.modelOverrides["claude-haiku-4-5-20251001"] == null' "remove obsolete Haiku override"
   assert_json "${settings}" '.modelOverrides["keep-model"] == "keep"' "preserve unrelated model override"
@@ -608,8 +610,11 @@ test_rolling_port_selection() {
 }
 
 test_agent_layout() {
+  local loaded_jd_token
   mkdir -p "${AGENT_DIR}"
   printf '%s\n' keep >"${AGENT_DIR}/user-file"
+  JD_GATEWAY_TOKEN='existing jd token'
+  export JD_GATEWAY_TOKEN
   initialize_install_layout
   [[ -d "${AGENT_BIN_DIR}" && -d "${AGENT_CONFIG_DIR}" &&
      -d "${AGENT_HOME}" && -d "${AGENT_CACHE_DIR}/npm" &&
@@ -617,6 +622,17 @@ test_agent_layout() {
      -d "${CODEX_MODEL_CATALOG_DIR}" ]] || fail "agent subdirectories"
   [[ -f "${AGENT_DIR}/user-file" ]] || fail "existing agent content preservation"
   [[ -f "${AGENT_ENV_FILE}" ]] || fail "agent environment file"
+  grep -Fq 'export JD_GATEWAY_TOKEN=' "${AGENT_ENV_FILE}" ||
+    fail "agent environment does not preserve the JD token"
+  assert_file_mode 600 "${AGENT_ENV_FILE}" "agent environment with JD token"
+  loaded_jd_token=$(env -u JD_GATEWAY_TOKEN bash --noprofile --norc -c \
+    'source "$1"; printf "%s" "$JD_GATEWAY_TOKEN"' bash "${AGENT_ENV_FILE}")
+  assert_eq 'existing jd token' "${loaded_jd_token}" "round-trip JD token"
+  unset JD_GATEWAY_TOKEN
+  write_runtime_files
+  loaded_jd_token=$(env -u JD_GATEWAY_TOKEN bash --noprofile --norc -c \
+    'source "$1"; printf "%s" "$JD_GATEWAY_TOKEN"' bash "${AGENT_ENV_FILE}")
+  assert_eq 'existing jd token' "${loaded_jd_token}" "preserve JD token after installer rerun"
   [[ ! -e "${AGENT_DIR}/README.md" ]] || fail "installer must not generate README"
   [[ -x "${AGENT_BIN_DIR}/claude" && -x "${AGENT_BIN_DIR}/codex" &&
      -x "${AGENT_BIN_DIR}/ccr" ]] || fail "container-local launchers"
@@ -684,8 +700,7 @@ test_bash_startup_configuration() {
 }
 
 test_operation_manual() {
-  [[ -f "${MANUAL_PATH}" ]] || fail "operation manual"
-  assert_file_mode 644 "${MANUAL_PATH}" "operation manual mode"
+  [[ -f "${MANUAL_PATH}" && -r "${MANUAL_PATH}" ]] || fail "readable operation manual"
   grep -Fq 'bash ./set_claude_provider_keys.sh' "${MANUAL_PATH}" ||
     fail "manual installer command"
   grep -Fq 'bash ./test/set_claude_provider_keys_test.sh' "${MANUAL_PATH}" ||

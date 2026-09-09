@@ -24,6 +24,7 @@ readonly CLAUDE_CONFIG_DIR="${AGENT_CONFIG_DIR}/claude"
 readonly CLAUDE_SETTINGS_FILE="${CLAUDE_CONFIG_DIR}/settings.json"
 readonly CODEX_DIR="${AGENT_CONFIG_DIR}/codex"
 readonly CODEX_ENV_FILE="${CODEX_DIR}/gateways.env"
+readonly LEGACY_CODEX_JD_ENV_FILE="${CODEX_DIR}/jd.env"
 readonly CODEX_MODEL_CATALOG_DIR="${CODEX_DIR}/catalogs"
 readonly NODE_INSTALL_DIR="${AGENT_DIR}/node"
 readonly CCR_RUNTIME_FILE="${CCR_DIR}/runtime.env"
@@ -160,19 +161,37 @@ cleanup_temp_dir() {
 }
 
 write_runtime_files() {
-  local env_content claude_launcher codex_launcher ccr_launcher
+  local env_content claude_launcher codex_launcher ccr_launcher jd_token env_mode=644
+  jd_token=${JD_GATEWAY_TOKEN:-}
+  if [[ -z "${jd_token}" && -r "${AGENT_ENV_FILE}" ]]; then
+    jd_token=$(/usr/bin/env -u JD_GATEWAY_TOKEN /usr/bin/bash --noprofile --norc -c \
+      'source "$1" >/dev/null 2>&1; printf "%s" "${JD_GATEWAY_TOKEN:-}"' \
+      bash "${AGENT_ENV_FILE}")
+  fi
+  if [[ -z "${jd_token}" && -r "${LEGACY_CODEX_JD_ENV_FILE}" ]]; then
+    jd_token=$(/usr/bin/env -u JD_GATEWAY_TOKEN /usr/bin/bash --noprofile --norc -c \
+      'source "$1" >/dev/null 2>&1; printf "%s" "${JD_GATEWAY_TOKEN:-}"' \
+      bash "${LEGACY_CODEX_JD_ENV_FILE}")
+  fi
   printf -v env_content \
     'ai_setup_prepend_path() {\n  local ai_setup_entry ai_setup_rest ai_setup_clean=\x27\x27\n  ai_setup_rest=${PATH:-}\n  while [[ -n "${ai_setup_rest}" ]]; do\n    case "${ai_setup_rest}" in\n      *:*) ai_setup_entry=${ai_setup_rest%%:*}; ai_setup_rest=${ai_setup_rest#*:} ;;\n      *) ai_setup_entry=${ai_setup_rest}; ai_setup_rest=\x27\x27 ;;\n    esac\n    [[ "${ai_setup_entry}" == %q || "${ai_setup_entry}" == %q || -z "${ai_setup_entry}" ]] && continue\n    [[ -n "${ai_setup_clean}" ]] && ai_setup_clean+=:\n    ai_setup_clean+=${ai_setup_entry}\n  done\n  PATH=%q:%q${ai_setup_clean:+:${ai_setup_clean}}\n  export PATH\n}\nai_setup_prepend_path\nunset -f ai_setup_prepend_path\nexport CLAUDE_CONFIG_DIR=%q\nexport CODEX_HOME=%q\nexport NPM_CONFIG_CACHE=%q\n[[ ! -f %q ]] || source %q' \
     "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" \
     "${AGENT_BIN_DIR}" "${NODE_INSTALL_DIR}/bin" \
     "${CLAUDE_CONFIG_DIR}" "${CODEX_DIR}" "${AGENT_CACHE_DIR}/npm" \
     "${CODEX_ENV_FILE}" "${CODEX_ENV_FILE}"
+  if [[ -n "${jd_token}" ]]; then
+    printf -v env_content '%s\n\n# BEGIN JD gateway token\nexport JD_GATEWAY_TOKEN=%q\n# END JD gateway token' \
+      "${env_content}" "${jd_token}"
+    env_mode=600
+  fi
   # The format string treats %% as a literal %, so restore the Bash longest-prefix
   # expansion after printf renders the template.
   env_content=${env_content//'${ai_setup_rest%:*}'/'${ai_setup_rest%%:*}'}
-  # This file contains paths and exports, but no key values; all users need to
-  # be able to source it when the shared installation is used.
-  write_secure_file "${AGENT_ENV_FILE}" "${env_content}" 644
+  # JD is stored directly here when configured, so restrict the file when it contains that token.
+  write_secure_file "${AGENT_ENV_FILE}" "${env_content}" "${env_mode}"
+  if (( ! DRY_RUN )) && [[ -n "${jd_token}" && -f "${LEGACY_CODEX_JD_ENV_FILE}" ]]; then
+    rm -f -- "${LEGACY_CODEX_JD_ENV_FILE}"
+  fi
 
   printf -v claude_launcher \
     '#!/usr/bin/env bash\n[[ ! -r %q ]] || source %q\nexport CLAUDE_CONFIG_DIR=%q\nexec %q "$@"' \
@@ -1340,6 +1359,7 @@ build_claude_settings() {
           CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:"1"
         })
     | .model = "sonnet"
+    | .permissions = ((.permissions // {}) + {defaultMode:"bypassPermissions"})
     | if $volcano_fast_model != "" then
         .modelOverrides = (((.modelOverrides // {})
           | del(.["claude-haiku-4-5-20251001"]))

@@ -24,7 +24,8 @@ ai-coding-setup/
     │   ├── start_dsh_service.sh
     │   └── README.md
     ├── test/
-    │   └── set_claude_provider_keys_test.sh
+    │   ├── set_claude_provider_keys_test.sh
+    │   └── set_jd_gateway_config_test.sh
     └── README.md
 ```
 

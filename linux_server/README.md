@@ -5,10 +5,10 @@
 Claude Code、Codex、Claude Code Router（CCR）、Node.js、配置和缓存都放在
 当前容器的 `/agent` 目录中。
 
-仓库目录结构：
+本目录结构：
 
 ```text
-ai-coding-setup/
+linux_server/
 ├── README.md
 ├── set_claude_provider_keys.sh
 ├── set_jd_gateway_config.sh
@@ -16,7 +16,8 @@ ai-coding-setup/
 │   ├── start_dsh_service.sh
 │   └── README.md
 └── test/
-    └── set_claude_provider_keys_test.sh
+    ├── set_claude_provider_keys_test.sh
+    └── set_jd_gateway_config_test.sh
 ```
 
 `set_claude_provider_keys_test.sh` 默认执行修改代码后的隔离开发测试；加上
@@ -60,7 +61,7 @@ systemd=true
 
 ## 第一次安装
 
-请先进入需要使用这些工具的容器，再进入存放这套脚本的仓库根目录，然后运行：
+请先进入需要使用这些工具的容器，再进入仓库的 `ai-coding-setup/linux_server` 目录，然后运行：
 
 ```bash
 bash ./set_claude_provider_keys.sh
@@ -81,6 +82,11 @@ profile。直接以 root 执行且不设置它时，文件会归 root，普通�
 ```bash
 sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh --configure-only
 ```
+
+默认安装根目录是 `/agent`。如需在无 root 权限的目录中安装或隔离测试，可在运行两个 Linux
+脚本时设置 `AI_SETUP_AGENT_DIR`；例如
+`AI_SETUP_AGENT_DIR="$HOME/agent" bash ./set_claude_provider_keys.sh`。JD 配置脚本会使用同一
+变量查找 Claude、Codex 和公共环境文件。
 
 脚本会依次询问以下四个可选 API key：
 
@@ -120,7 +126,7 @@ catalog 的生成与隔离。当前环境能够找到 Codex 时，还会使用�
 
 ## 安装后验证 Codex
 
-完成安装和 token 配置后，在仓库根目录运行：
+完成安装和 token 配置后，在 `ai-coding-setup/linux_server` 目录运行：
 
 ```bash
 bash ./test/set_claude_provider_keys_test.sh --installed-codex
@@ -200,18 +206,21 @@ codex -m '火山AI网关/deepseek-v4-pro'
 
 ## 只生成京东网关配置
 
-`set_jd_gateway_config.sh` 是独立脚本，只生成 JD LLM Gateway 的 Claude Code 和 Codex
-配置；它不安装 Node.js、Claude Code、Codex 或 CCR，也不读取或修改
-`set_claude_provider_keys.sh` 保存的火山、百炼和 BlackAI token。默认只探测 JD 网关
-下方列出的候选模型，不会使用火山网关的模型列表。
+`set_jd_gateway_config.sh` 是基础安装完成后的附加脚本。它不安装 Node.js、Claude Code、
+Codex 或 CCR，也不修改主安装器保存的火山、百炼和 BlackAI 配置。默认只探测 JD 网关
+下方列出的候选模型，不会使用或混合其他网关的模型列表。
 
-### 一键追加到已有配置（推荐）
+### 一键追加到已有配置
 
-已有火山或其他网关配置时，使用 `--merge`：
+直接运行脚本即可。脚本会隐藏输入 JD token，并把 JD 支持追加到已有安装：
 
 ```bash
-bash ./set_jd_gateway_config.sh --merge
+bash ./set_jd_gateway_config.sh
 ```
+
+`--merge` 与默认行为相同，可在自动化命令中显式使用。这个模式不会修改 Claude 的主
+`settings.json` 或 Codex 的主 `config.toml`。已保存过 token 时，交互运行可直接
+按 Enter 保留原值；非交互运行会复用当前环境或 `/agent/env.sh` 中保存的值。
 
 - Codex 会生成独立 profile 文件：`$CODEX_HOME/jd.config.toml`。未设置 `CODEX_HOME`
   时，本安装器环境写入 `/agent/config/codex/jd.config.toml`；普通环境写入
@@ -219,30 +228,45 @@ bash ./set_jd_gateway_config.sh --merge
 - 同时生成 JD 独立模型 catalog：`$CODEX_HOME/catalogs/jd.json`；模型列表只包含探测成功
   的 JD 模型，不会继承全局配置里的火山模型。
 - 现有 `$CODEX_HOME/config.toml` 不会被修改。
-- 脚本会把 token 保存到 `$CODEX_HOME/jd.env`（权限 `600`），并把自动加载配置追加到
-  `/agent/env.sh`；普通 Linux 环境追加到 `~/.bashrc` 或 `~/.zshrc`。当前已打开的
-  安装器 shell 需要执行一次：
+- 安装器布局中，脚本把 `JD_GATEWAY_TOKEN` 直接追加到 `/agent/env.sh` 的受管区块，并把
+  文件权限设置为 `600`；不会另外生成 `jd.env`。主安装器以后重写 `/agent/env.sh` 时会
+  读取并保留这个值。当前已打开的 shell 需要执行一次：
 
   ```bash
   source /agent/env.sh
   ```
 
-- 之后启动 JD 网关：
+- 主安装器中的 `claude` 命令继续读取原来的 `settings.json` 并通过 CCR 使用火山、百炼和
+  BlackAI 网关。JD 脚本不会生成第二份 Claude settings 文件，而是在 `/agent/bin` 生成
+  `claude-jd` 启动器。启动器从 `/agent/env.sh` 读取 token，并只在自己的 Claude 进程中
+  叠加 JD 地址、模型和权限：
+
+  ```bash
+  claude-jd
+  ```
+
+  普通 Linux 环境会把 token 追加到 `~/.bashrc` 或 `~/.zshrc`，并生成
+  `~/.local/bin/claude-jd`。如果该目录不在 `PATH`，可使用完整路径：
+
+  ```bash
+  "$HOME/.local/bin/claude-jd"
+  ```
+
+- Codex 使用独立 JD profile：
 
   ```bash
   codex --profile jd
   ```
 
-- Claude Code 会把 JD 必需字段合并进 `$CLAUDE_CONFIG_DIR/settings.json`。未设置
-  `CLAUDE_CONFIG_DIR` 时，本安装器环境合并到 `/agent/config/claude/settings.json`；
-  普通环境合并到 `~/.claude/settings.json`。原有其他字段会保留，冲突字段以 JD 为准；
-  实际修改前会自动创建 `settings.json.bak.<时间戳>` 备份。
-- 这个脚本不支持 Claude Code 的多 profile 主配置切换。如果需要继续使用火山 Claude
-  配置，请先备份或不要用本脚本合并 Claude 配置；也可以改用 `--codex-only --merge`
-  只追加 Codex profile：
+  JD profile 与火山 profile 使用相同的连续执行策略：`approval_policy = "never"`、
+  `sandbox_mode = "danger-full-access"`，新启动的 JD 会话不会请求命令审批。
+
+- `claude-jd` 使用 `bypassPermissions`；主安装器生成的 Claude CCR 配置也使用相同模式。
+  JD 路由只存在于 `claude-jd` 进程中，不会改变普通 `claude` 的网关。
+- 如果只需要 Codex JD profile，可以使用：
 
   ```bash
-  bash ./set_jd_gateway_config.sh --codex-only --merge
+  bash ./set_jd_gateway_config.sh --codex-only
   ```
 
 ### 其他模式
@@ -254,26 +278,30 @@ bash ./set_jd_gateway_config.sh --standalone --output-dir "$HOME/jd-config"
 # 只生成 Codex 独立配置
 bash ./set_jd_gateway_config.sh --standalone --codex-only
 
-# 只打印将要写入的 JSON/TOML，不写文件
-bash ./set_jd_gateway_config.sh --merge --dry-run
+# 只显示将要修改的文件，不写文件、不打印 token；仍会探测网关
+bash ./set_jd_gateway_config.sh --dry-run
+
+# 完全离线预览，不写文件、不打印 token，也不探测网关
+bash ./set_jd_gateway_config.sh --dry-run --no-probe
 ```
 
 `--standalone` 会在输出目录生成 `claude-settings.json` 和 `codex-config.toml`。
-`--merge` 和 `--standalone` 不能同时使用。两者都不使用时，脚本会写入主配置
-`~/.claude/settings.json` 和 `$CODEX_HOME/config.toml`（或 `~/.codex/config.toml`），
-这会覆盖已有配置；不要在已有火山配置的环境中使用这种默认模式。
+`--merge` 和 `--standalone` 不能同时使用。默认追加模式不会修改 Claude 的
+`settings.json` 或 Codex 的 `config.toml`，只更新 `/agent/env.sh` 的 JD 变量、
+`jd.config.toml`、模型 catalog 和 `/agent/bin/claude-jd` 启动器。Codex 当前通过独立
+`<profile>.config.toml` 实现 `--profile`，因此 `jd.config.toml` 是必须保留的 profile 文件。
 
 ### token 和权限
 
 默认使用 Codex 的 `env_key = "JD_GATEWAY_TOKEN"`，不会把 token 写入 `jd.config.toml`。
-`--merge` 或默认模式会把 token 保存到专用环境文件 `$CODEX_HOME/jd.env`，权限为 `600`，
-并自动追加 source 配置；安装器环境追加到 `/agent/env.sh`，普通环境追加到 `~/.bashrc` /
-`~/.zshrc`。交互输入 token 后通常不需要再手动 `export`。当前已打开的安装器 shell 需要
-执行一次 `source /agent/env.sh`。
+默认追加模式会把 token 直接写入 `/agent/env.sh`，并将该文件权限设为 `600`；普通环境
+则写入 `~/.bashrc` 或 `~/.zshrc` 的受管区块。交互输入 token 后通常不需要再手动
+`export`。当前已打开的安装器 shell 需要执行一次 `source /agent/env.sh`。
 
-如果明确选择 `--inline-token`，token 会写入 TOML。选择 `--no-save-token` 时不保存
-token 环境文件，也不修改 shell 配置。无论哪种方式，生成配置和 token 文件权限都是
-`600`。不要把 token 或生成文件内容粘贴到聊天、日志、工单或代码仓库中。
+如果在 `--codex-only` 模式明确选择 `--inline-token`，token 会写入 TOML 而不修改环境文件；
+Claude 同时启用时仍需要环境中的 JD token。选择 `--no-save-token` 时不保存
+token，也不修改 `/agent/env.sh` 或 shell 配置。包含 token 的 `/agent/env.sh` 和生成的
+配置文件权限都是 `600`。不要把 token 或生成文件内容粘贴到聊天、日志、工单或代码仓库中。
 
 ### 模型探测
 
@@ -285,8 +313,18 @@ token 环境文件，也不修改 shell 配置。无论哪种方式，生成配�
 | Codex | `GPT-5.6-Terra-joybuilder`、`GPT-5.6-Sol-joybuilder` |
 
 可用模型以当前 JD token 实际探测结果为准；探测失败的模型不会写入配置。全部失败时，
-脚本会降级使用全部候选并输出警告。网络不可达时可用 `--no-probe`，但之后需要自行确认
-模型确实可用。
+脚本会停止且不修改配置。网络不可达时可明确使用 `--no-probe` 跳过验证，但之后需要自行
+确认模型确实可用。`--dry-run` 默认也会探测网关；与 `--no-probe` 一起使用才是完全离线预览。
+
+### JD 配置脚本测试
+
+```bash
+bash ./test/set_jd_gateway_config_test.sh
+```
+
+测试会在临时目录模拟已有 Claude/Codex/CCR 配置，检查默认交互追加、主配置隔离、
+`claude-jd`、`jd.config.toml`、token 权限、重复运行和 `--dry-run`。它不会访问 JD 网关，也不会修改
+`/agent` 下的真实配置。
 
 ## 查看脚本发现的模型
 
@@ -303,6 +341,10 @@ jq -r '.models[].slug' "/agent/config/codex/catalogs/blackai-claude.json"
 该 token 公布了模型；最终是否完全兼容 Claude/Codex，需要以实际调用结果为准。
 
 ## 以后如何重新运行
+
+主安装器重跑时会刷新 Claude 的 CCR 配置，同时从已有 `/agent/env.sh` 保留 JD token；
+`jd.config.toml`、`catalogs/jd.json` 和 `claude-jd` 也不会被删除。因此普通 `claude`
+继续使用 CCR，`claude-jd` 和 `codex --profile jd` 继续使用 JD，两者互不覆盖。
 
 只更新 token、端口和模型配置，不重新安装工具：
 
