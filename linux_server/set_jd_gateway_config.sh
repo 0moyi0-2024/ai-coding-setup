@@ -34,9 +34,9 @@ CODEX_BASE_URL='http://llm-gw.jd.local/v1'
 
 # JD 网关支持的候选模型（按端点拆分）
 CLAUDE_MODEL_CANDIDATES=(
-  'claude-opus-4-8[1m]'
-  'claude-opus-4-7[1m]'
-  'claude-sonnet-5[1m]'
+  'Claude-Opus-4.8-joybuilder'
+  'Claude-Opus-4.7-joybuilder'
+  'Claude-Sonnet-5-joybuilder'
 )
 CODEX_MODEL_CANDIDATES=(
   'GPT-5.6-Terra-joybuilder'
@@ -357,12 +357,24 @@ probe_codex_models() {
 
 build_claude_settings() {
   local -a models=("$@")
-  local opus='' sonnet='' model
+  local opus='' sonnet='' model normalized_model alias
+  local model_overrides='{}'
   for model in "${models[@]}"; do
-    case "${model}" in
+    normalized_model=${model,,}
+    case "${normalized_model}" in
       *opus*)   [[ -z "${opus}"   ]] && opus="${model}" ;;
       *sonnet*) [[ -z "${sonnet}" ]] && sonnet="${model}" ;;
     esac
+    alias=''
+    case "${model}" in
+      Claude-Opus-4.8-joybuilder) alias='claude-opus-4-8' ;;
+      Claude-Opus-4.7-joybuilder) alias='claude-opus-4-7' ;;
+      Claude-Sonnet-5-joybuilder) alias='claude-sonnet-5' ;;
+    esac
+    if [[ -n "${alias}" ]]; then
+      model_overrides=$(jq -c --arg alias "${alias}" --arg target "${model}" \
+        '. + {($alias):$target}' <<<"${model_overrides}")
+    fi
   done
   # 某一模型族全部探测失败时，用首个已验证模型兜底，避免写入空的默认模型。
   [[ -n "${opus}" ]] || opus=${models[0]}
@@ -377,6 +389,7 @@ build_claude_settings() {
     --arg opus_model "${opus}" \
     --arg sonnet_model "${sonnet}" \
     --argjson fallback "${fallback}" \
+    --argjson model_overrides "${model_overrides}" \
     '{
       "$schema": "https://json.schemastore.org/claude-code-settings.json",
       "env": {
@@ -397,11 +410,7 @@ build_claude_settings() {
       },
       "model": "opus",
       "fallbackModel": $fallback,
-      "modelOverrides": {
-        "claude-opus-4-8": "Claude-Opus-4.8-joybuilder",
-        "claude-opus-4-7": "Claude-Opus-4.7-joybuilder",
-        "claude-sonnet-5": "Claude-Sonnet-5-joybuilder"
-      },
+      "modelOverrides": $model_overrides,
       "permissions": { "deny": [], "defaultMode": "bypassPermissions" },
       "outputStyle": "Concise",
       "language": "Chinese",

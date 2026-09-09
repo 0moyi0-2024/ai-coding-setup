@@ -320,7 +320,7 @@ token，也不修改 `/agent/env.sh` 或 shell 配置。包含 token 的 `/agent
 
 | 端点 | 候选模型 |
 | --- | --- |
-| Claude | `claude-opus-4-8[1m]`、`claude-opus-4-7[1m]`、`claude-sonnet-5[1m]` |
+| Claude | `Claude-Opus-4.8-joybuilder`、`Claude-Opus-4.7-joybuilder`、`Claude-Sonnet-5-joybuilder` |
 | Codex | `GPT-5.6-Terra-joybuilder`、`GPT-5.6-Sol-joybuilder` |
 
 可用模型以当前 JD token 实际探测结果为准；探测失败的模型不会写入配置。全部失败时，

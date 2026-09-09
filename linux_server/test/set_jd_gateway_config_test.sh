@@ -153,6 +153,11 @@ TOML
     fail 'claude-jd did not pass the JD runtime settings and permission mode'
   jq -e '
     .env.ANTHROPIC_BASE_URL == "http://llm-gw.jd.local/anthropic"
+    and .env.ANTHROPIC_DEFAULT_OPUS_MODEL == "Claude-Opus-4.8-joybuilder"
+    and .env.ANTHROPIC_DEFAULT_SONNET_MODEL == "Claude-Sonnet-5-joybuilder"
+    and .modelOverrides["claude-opus-4-8"] == "Claude-Opus-4.8-joybuilder"
+    and .modelOverrides["claude-opus-4-7"] == "Claude-Opus-4.7-joybuilder"
+    and .modelOverrides["claude-sonnet-5"] == "Claude-Sonnet-5-joybuilder"
     and .permissions.defaultMode == "bypassPermissions"
     and (.env | has("ANTHROPIC_AUTH_TOKEN") | not)
   ' <<<"${runtime_settings}" >/dev/null || fail 'claude-jd runtime settings are invalid'
@@ -334,7 +339,7 @@ test_partial_model_availability() {
 #!/usr/bin/env bash
 for argument in "$@"; do
   case "${argument}" in
-    *claude-sonnet-5*|*GPT-5.6-Terra-joybuilder*) printf '200'; exit 0 ;;
+    *Claude-Sonnet-5-joybuilder*|*GPT-5.6-Terra-joybuilder*) printf '200'; exit 0 ;;
   esac
 done
 printf '404'
@@ -348,9 +353,10 @@ FAKE_CURL
   launcher_output=$(JD_GATEWAY_TOKEN="${TEST_TOKEN}" "${output_root}/claude-jd")
   runtime_settings=$(sed -n '2p' <<<"${launcher_output}")
   jq -e '
-    .env.ANTHROPIC_DEFAULT_OPUS_MODEL == "claude-sonnet-5[1m]"
-    and .env.ANTHROPIC_DEFAULT_SONNET_MODEL == "claude-sonnet-5[1m]"
+    .env.ANTHROPIC_DEFAULT_OPUS_MODEL == "Claude-Sonnet-5-joybuilder"
+    and .env.ANTHROPIC_DEFAULT_SONNET_MODEL == "Claude-Sonnet-5-joybuilder"
     and .fallbackModel == []
+    and .modelOverrides == {"claude-sonnet-5":"Claude-Sonnet-5-joybuilder"}
     and (.env | has("ANTHROPIC_AUTH_TOKEN") | not)
   ' <<<"${runtime_settings}" >/dev/null ||
     fail 'Claude defaults include a model that failed probing'
