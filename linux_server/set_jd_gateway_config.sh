@@ -21,6 +21,7 @@ set -Eeuo pipefail
 #   --codex-only          只生成 Codex 配置
 #   --no-probe            跳过模型探测，直接使用全部候选模型
 #   --inline-token        Codex 配置使用 http_headers 内联 token（默认使用 env_key 环境变量引用，更安全）
+#   --no-save-token       不自动保存 token 环境变量（默认在 merge/default Codex 模式下保存）
 #   --dry-run             只打印将要写入的内容，不实际写文件
 #   -h, --help            显示帮助
 # ============================================================
@@ -51,6 +52,7 @@ CLAUDE_ONLY=0
 CODEX_ONLY=0
 NO_PROBE=0
 INLINE_TOKEN=0
+NO_SAVE_TOKEN=0
 DRY_RUN=0
 CODEX_CATALOG_FILE=''
 OUTPUT_DIR_SET=0
@@ -75,6 +77,7 @@ usage() {
   --codex-only          只生成 Codex 配置
   --no-probe            跳过模型探测，直接使用全部候选模型
   --inline-token        Codex 配置使用 http_headers 内联 token（默认 env_key 引用环境变量，更安全）
+  --no-save-token       不自动保存 token 环境变量；默认会保存到 600 权限的专用 env 文件
   --dry-run             只打印将要写入的内容，不实际写文件
   -h, --help            显示本帮助
 
@@ -126,6 +129,10 @@ parse_args() {
         INLINE_TOKEN=1
         shift
         ;;
+      --no-save-token)
+        NO_SAVE_TOKEN=1
+        shift
+        ;;
       --dry-run)
         DRY_RUN=1
         shift
@@ -165,6 +172,8 @@ prompt_token() {
 claude_settings_path() {
   if ((STANDALONE)); then
     printf '%s/claude-settings.json' "${OUTPUT_DIR}"
+  elif (( ! OUTPUT_DIR_SET )) && [[ -z "${CLAUDE_CONFIG_DIR:-}" && -d /agent/config/claude ]] && { [[ "${HOME:-}" == /root || "${HOME:-}" == /home/* ]]; }; then
+    printf '%s/settings.json' /agent/config/claude
   elif [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
     printf '%s/settings.json' "${CLAUDE_CONFIG_DIR%/}"
   else
@@ -175,15 +184,16 @@ claude_settings_path() {
 codex_config_path() {
   if ((STANDALONE)); then
     printf '%s/codex-config.toml' "${OUTPUT_DIR}"
-  elif [[ -n "${CODEX_HOME:-}" ]]; then
-    if ((MERGE)); then
-      # Codex 支持独立 profile 文件；不碰已有 config.toml。
+  elif ((MERGE)); then
+    if (( ! OUTPUT_DIR_SET )) && [[ -z "${CODEX_HOME:-}" && -d /agent/config/codex ]] && { [[ "${HOME:-}" == /root || "${HOME:-}" == /home/* ]]; }; then
+      printf '%s/jd.config.toml' /agent/config/codex
+    elif [[ -n "${CODEX_HOME:-}" ]]; then
       printf '%s/jd.config.toml' "${CODEX_HOME%/}"
     else
-      printf '%s/config.toml' "${CODEX_HOME%/}"
+      printf '%s/.codex/jd.config.toml' "${OUTPUT_DIR}"
     fi
-  elif ((MERGE)); then
-    printf '%s/.codex/jd.config.toml' "${OUTPUT_DIR}"
+  elif [[ -n "${CODEX_HOME:-}" ]]; then
+    printf '%s/config.toml' "${CODEX_HOME%/}"
   else
     printf '%s/.codex/config.toml' "${OUTPUT_DIR}"
   fi
@@ -457,6 +467,63 @@ merge_claude_settings() {
   jq -S -s '.[0] * .[1]' "${path}" <(printf '%s\n' "${new_content}")
 }
 
+upsert_source_block() {
+  local target=$1
+  local env_file=$2
+  local dir tmp kept final target_mode
+  dir=$(dirname "${target}")
+  tmp=$(mktemp "${dir}/.jd-source.XXXXXXXX")
+  final="${tmp}.final"
+
+  awk '
+    $0 == "# BEGIN JD gateway token" { skip=1; next }
+    $0 == "# END JD gateway token" { skip=0; next }
+    !skip { print }
+  ' "${target}" >"${tmp}" 2>/dev/null || : >"${tmp}"
+
+  {
+    cat "${tmp}"
+    printf '\n# BEGIN JD gateway token\n'
+    printf '[[ -r "%s" ]] && source "%s"\n' "${env_file}" "${env_file}"
+    printf '# END JD gateway token\n'
+  } >"${final}"
+
+  target_mode=$(stat -c '%a' "${target}" 2>/dev/null || printf '600')
+  chmod "${target_mode}" "${final}"
+  mv -f "${final}" "${target}"
+}
+
+save_codex_token() {
+  local codex_dir env_file rc_file source_file
+  codex_dir=$(dirname "$(codex_config_path)")
+  mkdir -p "${codex_dir}"
+  env_file="${codex_dir}/jd.env"
+
+  local tmp
+  tmp=$(mktemp "${codex_dir}/.jd-env.XXXXXXXX")
+  printf 'export JD_GATEWAY_TOKEN=%q\n' "${TOKEN}" >"${tmp}"
+  chmod 600 "${tmp}"
+  mv -f "${tmp}" "${env_file}"
+  log "已保存 JD token 环境文件 ${env_file} (mode 600)"
+
+  # 安装器环境的 codex 启动器会 source gateways.env；这里让它自动加载 JD token。
+  # 显式 --output-dir 通常是打包/预览目录，不要改当前用户的 shell 配置。
+  if (( ! OUTPUT_DIR_SET )) && [[ "${env_file}" == "/agent/config/codex/jd.env" && -f "/agent/config/codex/gateways.env" ]]; then
+    upsert_source_block "/agent/config/codex/gateways.env" "${env_file}"
+    log 'Codex 启动器将在新会话自动加载 JD token'
+  elif (( ! OUTPUT_DIR_SET )); then
+    for rc_file in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+      [[ -f "${rc_file}" ]] || continue
+      upsert_source_block "${rc_file}" "${env_file}"
+    done
+    log '新 Bash/Zsh 会话会自动加载 JD token'
+  else
+    log "预览目录模式不会修改 shell 配置；使用前请手动 source ${env_file}"
+  fi
+
+  log '当前已打开的 shell 需要执行一次: source "'"${env_file}"'"'
+}
+
 write_file() {
   local path=$1
   local content=$2
@@ -479,11 +546,6 @@ write_file() {
 
 main() {
   parse_args "$@"
-  # 未显式指定 --output-dir 且本机存在安装器目录时，优先写入安装器管理的配置目录。
-  if (( ! OUTPUT_DIR_SET )); then
-    [[ -n "${CODEX_HOME:-}" || ! -d /agent/config/codex ]] || CODEX_HOME=/agent/config/codex
-    [[ -n "${CLAUDE_CONFIG_DIR:-}" || ! -d /agent/config/claude ]] || CLAUDE_CONFIG_DIR=/agent/config/claude
-  fi
   (( STANDALONE ^ MERGE )) || die "--standalone 和 --merge 只能选择一个；不使用它们时将覆盖主配置"
   require_command jq
   require_command curl
@@ -530,6 +592,10 @@ main() {
       log '现有 Codex config.toml 未修改；JD 网关请使用: codex --profile jd'
     elif (( ! STANDALONE )); then
       log 'JD 已写入 Codex 主配置；启动命令: codex'
+    fi
+
+    if (( ! INLINE_TOKEN && ! NO_SAVE_TOKEN && ! STANDALONE )); then
+      save_codex_token
     fi
 
     if (( ! INLINE_TOKEN )); then

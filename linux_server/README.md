@@ -219,10 +219,16 @@ bash ./set_jd_gateway_config.sh --merge
 - 同时生成 JD 独立模型 catalog：`$CODEX_HOME/catalogs/jd.json`；模型列表只包含探测成功
   的 JD 模型，不会继承全局配置里的火山模型。
 - 现有 `$CODEX_HOME/config.toml` 不会被修改。
+- 脚本会把 token 保存到 `$CODEX_HOME/jd.env`（权限 `600`），并让后续 Codex 会话自动
+  加载；当前已打开的 shell 需要执行一次：
+
+  ```bash
+  source "$CODEX_HOME/jd.env"
+  ```
+
 - 之后启动 JD 网关：
 
   ```bash
-  export JD_GATEWAY_TOKEN='<你的JD网关token>'
   codex --profile jd
   ```
 
@@ -258,14 +264,14 @@ bash ./set_jd_gateway_config.sh --merge --dry-run
 
 ### token 和权限
 
-默认使用 Codex 的 `env_key = "JD_GATEWAY_TOKEN"`，不会把 token 写入 `jd.config.toml`；
-运行 Codex 前需要设置：
+默认使用 Codex 的 `env_key = "JD_GATEWAY_TOKEN"`，不会把 token 写入 `jd.config.toml`。
+`--merge` 或默认模式会把 token 保存到专用环境文件 `$CODEX_HOME/jd.env`，权限为 `600`，
+并自动追加 source 配置；安装器环境追加到 `gateways.env`，普通环境追加到 `~/.bashrc` /
+`~/.zshrc`。交互输入 token 后通常不需要再手动 `export`。当前已打开的 shell 需要执行
+一次 `source "$CODEX_HOME/jd.env"`。
 
-```bash
-export JD_GATEWAY_TOKEN='<你的JD网关token>'
-```
-
-如果明确选择 `--inline-token`，token 会写入 TOML。无论哪种方式，生成文件权限都是
+如果明确选择 `--inline-token`，token 会写入 TOML。选择 `--no-save-token` 时不保存
+token 环境文件，也不修改 shell 配置。无论哪种方式，生成配置和 token 文件权限都是
 `600`。不要把 token 或生成文件内容粘贴到聊天、日志、工单或代码仓库中。
 
 ### 模型探测
