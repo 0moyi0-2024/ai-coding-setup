@@ -213,8 +213,11 @@ codex -m '火山AI网关/deepseek-v4-pro'
 bash ./set_jd_gateway_config.sh --merge
 ```
 
-- Codex 会生成独立 profile 文件：`$CODEX_HOME/jd.config.toml`；未设置 `CODEX_HOME`
-  时写入 `~/.codex/jd.config.toml`。
+- Codex 会生成独立 profile 文件：`$CODEX_HOME/jd.config.toml`。未设置 `CODEX_HOME`
+  时，本安装器环境写入 `/agent/config/codex/jd.config.toml`；普通环境写入
+  `~/.codex/jd.config.toml`。
+- 同时生成 JD 独立模型 catalog：`$CODEX_HOME/catalogs/jd.json`；模型列表只包含探测成功
+  的 JD 模型，不会继承全局配置里的火山模型。
 - 现有 `$CODEX_HOME/config.toml` 不会被修改。
 - 之后启动 JD 网关：
 
@@ -223,9 +226,10 @@ bash ./set_jd_gateway_config.sh --merge
   codex --profile jd
   ```
 
-- Claude Code 会把 JD 必需字段合并进 `$CLAUDE_CONFIG_DIR/settings.json`；未设置
-  `CLAUDE_CONFIG_DIR` 时合并到 `~/.claude/settings.json`。原有其他字段会保留，冲突
-  字段以 JD 为准；实际修改前会自动创建 `settings.json.bak.<时间戳>` 备份。
+- Claude Code 会把 JD 必需字段合并进 `$CLAUDE_CONFIG_DIR/settings.json`。未设置
+  `CLAUDE_CONFIG_DIR` 时，本安装器环境合并到 `/agent/config/claude/settings.json`；
+  普通环境合并到 `~/.claude/settings.json`。原有其他字段会保留，冲突字段以 JD 为准；
+  实际修改前会自动创建 `settings.json.bak.<时间戳>` 备份。
 - 这个脚本不支持 Claude Code 的多 profile 主配置切换。如果需要继续使用火山 Claude
   配置，请先备份或不要用本脚本合并 Claude 配置；也可以改用 `--codex-only --merge`
   只追加 Codex profile：

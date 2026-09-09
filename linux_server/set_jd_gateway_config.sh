@@ -52,6 +52,8 @@ CODEX_ONLY=0
 NO_PROBE=0
 INLINE_TOKEN=0
 DRY_RUN=0
+CODEX_CATALOG_FILE=''
+OUTPUT_DIR_SET=0
 
 log() { printf '[jd-setup] %s\n' "$*" >&2; }
 warn() { printf '[jd-setup] WARNING: %s\n' "$*" >&2; }
@@ -97,6 +99,7 @@ parse_args() {
       --output-dir)
         [[ -n "${2:-}" ]] || die "--output-dir 需要一个参数"
         OUTPUT_DIR="$2"
+        OUTPUT_DIR_SET=1
         shift 2
         ;;
       --standalone)
@@ -315,11 +318,17 @@ build_codex_config() {
   else
     auth_line='env_key = "JD_GATEWAY_TOKEN"'
   fi
+  local catalog_line=''
+  if [[ -n "${CODEX_CATALOG_FILE}" ]]; then
+    catalog_line="model_catalog_json = \"${CODEX_CATALOG_FILE}\""
+  fi
+
   cat <<TOML_EOF
 #:schema https://learn.chatgpt.com/docs/config-schema.json
 
 model_provider = "jd"
 model = "${model}"
+${catalog_line}
 model_reasoning_effort = "xhigh"
 plan_mode_reasoning_effort = "max"
 model_reasoning_summary = "detailed"
@@ -371,6 +380,61 @@ exclude = [
 TOML_EOF
 }
 
+generate_codex_catalog() {
+  local -a models=("$@")
+  local codex_bin
+  codex_bin=$(command -v codex || true)
+  [[ -n "${codex_bin}" ]] || die '生成 JD 模型 catalog 需要 codex 命令'
+
+  local dir
+  if ((STANDALONE)); then
+    dir="${OUTPUT_DIR}"
+  else
+    dir=$(dirname "$(codex_config_path)")
+  fi
+  CODEX_CATALOG_FILE="${dir}/catalogs/jd.json"
+  if ((DRY_RUN)); then
+    log "[dry-run] 将生成 JD 模型 catalog ${CODEX_CATALOG_FILE}"
+    return 0
+  fi
+  mkdir -p "${dir}/catalogs"
+
+  local tmp
+  tmp=$(mktemp -d "${dir}/.jd-catalog.XXXXXXXX")
+  mkdir -p "${tmp}/home"
+  local base_catalog
+  base_catalog=$(mktemp "${tmp}/base.XXXXXXXX")
+  CODEX_HOME="${tmp}/home" "${codex_bin}" debug models --bundled >"${base_catalog}"
+
+  local model_array
+  model_array=$(printf '%s\n' "${models[@]}" | jq -R . | jq -s .)
+  jq     --argjson models "${model_array}"     '{models: [
+        . as $base
+        | $base.models[0] as $template
+        | $models[]
+        | $template * {
+            slug: .,
+            display_name: .,
+            description: ("JD LLM Gateway model " + .),
+            default_reasoning_level: "xhigh",
+            supported_reasoning_levels: [
+              {effort:"xhigh", description:"Extra high reasoning"},
+              {effort:"max", description:"Maximum reasoning"}
+            ],
+            visibility: "list",
+            supported_in_api: true,
+            priority: 100,
+            availability_nux: {message:"This model is served through JD LLM Gateway."},
+            context_window: 256000,
+            max_context_window: 256000,
+            effective_context_window_percent: 95
+          }
+      ]}' "${base_catalog}" >"${CODEX_CATALOG_FILE}"
+  chmod 600 "${CODEX_CATALOG_FILE}"
+  rm -rf -- "${tmp}"
+  log "已生成 JD 模型 catalog ${CODEX_CATALOG_FILE}"
+}
+
 merge_claude_settings() {
   local path=$1
   local new_content=$2
@@ -415,6 +479,11 @@ write_file() {
 
 main() {
   parse_args "$@"
+  # 未显式指定 --output-dir 且本机存在安装器目录时，优先写入安装器管理的配置目录。
+  if (( ! OUTPUT_DIR_SET )); then
+    [[ -n "${CODEX_HOME:-}" || ! -d /agent/config/codex ]] || CODEX_HOME=/agent/config/codex
+    [[ -n "${CLAUDE_CONFIG_DIR:-}" || ! -d /agent/config/claude ]] || CLAUDE_CONFIG_DIR=/agent/config/claude
+  fi
   (( STANDALONE ^ MERGE )) || die "--standalone 和 --merge 只能选择一个；不使用它们时将覆盖主配置"
   require_command jq
   require_command curl
@@ -450,6 +519,7 @@ main() {
   fi
 
   if (( ! CLAUDE_ONLY )); then
+    generate_codex_catalog "${codex_models[@]}"
     local codex_path
     codex_path=$(codex_config_path)
     local codex_content
