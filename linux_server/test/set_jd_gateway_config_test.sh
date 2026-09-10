@@ -39,7 +39,7 @@ make_fake_codex() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 if [[ "${1:-}" == debug && "${2:-}" == models && "${3:-}" == --bundled ]]; then
-  printf '%s\n' '{"models":[{"slug":"base","display_name":"Base","context_window":128000}]}'
+  printf '%s\n' '{"models":[{"slug":"base","display_name":"Base","context_window":128000,"use_responses_lite":true}]}'
   exit 0
 fi
 printf 'unexpected fake Codex arguments:' >&2
@@ -104,6 +104,9 @@ TOML
     >/dev/null || fail 'existing Codex defaults changed while registering JD provider'
   assert_file_mode 600 "${codex_dir}/jd.config.toml"
   assert_file_mode 600 "${codex_dir}/catalogs/jd.json"
+  jq -e 'all(.models[]; .use_responses_lite == false)' \
+    "${codex_dir}/catalogs/jd.json" >/dev/null ||
+    fail 'JD catalog retained the incompatible Responses Lite history format'
   [[ ! -e "${codex_dir}/jd.env" ]] || fail 'JD token was saved in a separate jd.env file'
   [[ ! -e "${claude_dir}/jd.settings.json" ]] || fail 'a separate Claude JD settings file was generated'
   [[ -x "${user_home}/.local/bin/claude-jd" ]] || fail 'Claude JD launcher was not generated'

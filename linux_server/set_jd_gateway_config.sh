@@ -622,7 +622,8 @@ generate_codex_catalog() {
             availability_nux: {message:"This model is served through JD LLM Gateway."},
             context_window: 256000,
             max_context_window: 256000,
-            effective_context_window_percent: 95
+            effective_context_window_percent: 95,
+            use_responses_lite: false
           }
       ]}' "${base_catalog}" >"${catalog_tmp}"; then
     die '无法生成 JD 模型 catalog；原文件未修改'

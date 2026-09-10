@@ -234,7 +234,8 @@ Codex 主配置追加一个不含 token 的 JD provider 注册，使 JD 会话�
   时，本安装器环境写入 `/agent/config/codex/jd.config.toml`；普通环境写入
   `~/.codex/jd.config.toml`。
 - 同时生成 JD 独立模型 catalog：`$CODEX_HOME/catalogs/jd.json`；模型列表只包含探测成功
-  的 JD 模型，不会继承全局配置里的火山模型。
+  的 JD 模型，不会继承全局配置里的火山模型。JD catalog 使用标准 Responses 历史格式，
+  因此从其他 provider 切换或恢复的长会话不会携带 JD 网关不支持的 Responses Lite 项。
 - `$CODEX_HOME/config.toml` 只增加带受管标记的 `[model_providers.jd]` 注册；不会改变原来的
   `model_provider`、`model`、CCR 配置或其他 provider。这个注册使不带 `--profile jd` 的
   `codex resume <JD会话ID>` 也能识别会话中保存的 JD provider。
