@@ -19,7 +19,7 @@ ai-coding-setup/
 │   └── README.md
 └── linux_server/                         # Linux / 容器环境
     ├── set_claude_provider_keys.sh       # AI 编程工具链配置（Claude Code + Codex + CCR）
-    ├── set_jd_gateway_config.sh          # 独立生成京东网关 Claude/Codex 配置
+    ├── set_jd_gateway_config.sh          # 在基础安装上追加京东网关 Claude/Codex 配置
     ├── dsh_server/                       # DSH Web 服务管理（systemd）
     │   ├── start_dsh_service.sh
     │   └── README.md
