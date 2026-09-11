@@ -241,6 +241,49 @@ TOML
   pass 'manual JD provider replaces obsolete managed registration cleanly'
 }
 
+test_ccr_flattened_provider_refresh() {
+  local install_root="${TEST_ROOT}/ccr-flattened-provider"
+  local codex_dir="${install_root}/codex"
+  local user_home="${install_root}/home"
+  local fake_bin="${install_root}/bin"
+  mkdir -p "${codex_dir}" "${user_home}"
+  make_fake_codex "${fake_bin}"
+  cat >"${codex_dir}/config.toml" <<'TOML'
+model = "existing-model"
+[model_providers.jd]
+name = "JD LLM Gateway"
+base_url = "http://llm-gw.jd.local/v1"
+env_key = "JD_GATEWAY_TOKEN"
+wire_api = "responses"
+models = ["old-model"]
+
+# BEGIN CCR managed Codex provider
+[model_providers.claude-code-router]
+name = "Claude Code Router"
+base_url = "http://127.0.0.1:3456/v1"
+wire_api = "responses"
+# END CCR managed Codex provider
+TOML
+
+  JD_GATEWAY_TOKEN="${TEST_TOKEN}" \
+    PATH="${fake_bin}:/usr/bin:/bin" \
+    HOME="${user_home}" \
+    CODEX_HOME="${codex_dir}" \
+    bash "${SCRIPT_PATH}" --codex-only --no-probe >/dev/null 2>&1
+
+  [[ "$(grep -Fxc '[model_providers.jd]' "${codex_dir}/config.toml")" -eq 1 ]] ||
+    fail 'CCR-flattened JD provider was duplicated'
+  grep -Fq '# BEGIN JD gateway provider' "${codex_dir}/config.toml" ||
+    fail 'CCR-flattened JD provider was not returned to a managed block'
+  grep -Fq 'models = ["GPT-5.6-Terra-joybuilder", "GPT-5.6-Sol-joybuilder"]' \
+    "${codex_dir}/config.toml" || fail 'CCR-flattened JD provider models were not refreshed'
+  grep -Fq '# BEGIN CCR managed Codex provider' "${codex_dir}/config.toml" ||
+    fail 'refreshing the JD provider removed the CCR block marker'
+  grep -Fq '[model_providers.claude-code-router]' "${codex_dir}/config.toml" ||
+    fail 'refreshing the JD provider removed the CCR provider'
+  pass 'CCR-flattened generated JD provider is refreshed safely'
+}
+
 test_dry_run() {
   local output_root="${TEST_ROOT}/dry-run"
   local fake_bin="${TEST_ROOT}/dry-bin"
@@ -258,8 +301,11 @@ test_agent_dir_discovery() {
   local agent_dir="${TEST_ROOT}/agent with spaces"
   local user_home="${TEST_ROOT}/export/home/test-user"
   local fake_bin="${TEST_ROOT}/agent-bin"
-  local loaded_token launcher_output
-  mkdir -p "${agent_dir}/bin" "${agent_dir}/config/claude" "${agent_dir}/config/codex" "${user_home}"
+  local loaded_token launcher_output resume_output
+  local jd_session_id='33333333-3333-4333-8333-333333333333'
+  local session_dir="${agent_dir}/config/codex/sessions/2026/09/11"
+  mkdir -p "${agent_dir}/bin" "${agent_dir}/node/bin" \
+    "${agent_dir}/config/claude" "${agent_dir}/config/codex" "${session_dir}" "${user_home}"
   printf '%s\n' 'export EXISTING_SETTING=keep' >"${agent_dir}/env.sh"
   cat >"${agent_dir}/config/codex/gateways.env" <<'LEGACY_ENV'
 export EXISTING_GATEWAY_KEY=keep
@@ -274,6 +320,11 @@ LEGACY_ENV
 printf '%s\n' "$@"
 FAKE_CLAUDE
   chmod 755 "${agent_dir}/bin/claude"
+  cat >"${agent_dir}/node/bin/codex" <<'FAKE_NODE_CODEX'
+#!/usr/bin/env bash
+printf '%s\n' "$@"
+FAKE_NODE_CODEX
+  chmod 755 "${agent_dir}/node/bin/codex"
   make_fake_codex "${fake_bin}"
 
   printf '%s\n' "${TEST_TOKEN}" | env -u JD_GATEWAY_TOKEN -u CLAUDE_CONFIG_DIR -u CODEX_HOME \
@@ -309,6 +360,12 @@ FAKE_CLAUDE
   jq -e '.env.ANTHROPIC_BASE_URL == "http://llm-gw.jd.local/anthropic"' \
     <<<"$(sed -n '2p' <<<"${launcher_output}")" >/dev/null ||
     fail 'claude-jd runtime configuration does not select JD'
+  printf '%s\n' \
+    '{"type":"session_meta","payload":{"model_provider":"jd"}}' \
+    >"${session_dir}/rollout-test-${jd_session_id}.jsonl"
+  resume_output=$("${agent_dir}/bin/codex" resume "${jd_session_id}")
+  [[ "${resume_output}" == "$(printf '%s\n' --profile jd resume "${jd_session_id}")" ]] ||
+    fail 'JD installer did not update the Codex launcher for bare session resume'
   pass 'custom agent directory is discovered and shell paths are escaped'
 }
 
@@ -516,6 +573,27 @@ PY
   pass 'inline token is escaped as valid TOML'
 }
 
+test_jd_ccr_config_builder() {
+  local config
+  config=$(TOKEN='new-jd-token' CODEX_BASE_URL='http://llm-gw.jd.local/v1' \
+    bash -c 'source "$1"; TOKEN=$2; CODEX_BASE_URL=$3; build_jd_ccr_config "$4" "$5"' bash \
+      "${SCRIPT_PATH}" 'new-jd-token' 'http://llm-gw.jd.local/v1' \
+      '{"ok":true,"value":{"Providers":[{"id":"custom","name":"Custom"},{"id":"jd","name":"JD LLM Gateway","apiKey":"old","models":["old"]}]}}' \
+      '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]')
+  jq -e '[.Providers[] | select(.id == "custom")] | length == 1' <<<"${config}" >/dev/null ||
+    fail 'JD CCR merge did not preserve unrelated providers'
+  jq -e '[.Providers[] | select(.id == "jd")] | length == 1' <<<"${config}" >/dev/null ||
+    fail 'JD CCR merge produced duplicate providers'
+  jq -e '[.Providers[] | select(.id == "jd")][0]
+    | .name == "京东网关"
+      and .type == "openai_responses"
+      and .baseUrl == "http://llm-gw.jd.local/v1"
+      and .apiKey == "new-jd-token"
+      and .models == ["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]' \
+    <<<"${config}" >/dev/null || fail 'JD CCR provider was rendered incorrectly'
+  pass 'JD provider merges into the unified CCR configuration'
+}
+
 test_mode_validation() {
   if bash "${SCRIPT_PATH}" --standalone --merge >/dev/null 2>&1; then
     fail '--standalone and --merge were accepted together'
@@ -529,6 +607,7 @@ test_mode_validation() {
 command -v jq >/dev/null 2>&1 || fail 'jq is required for the test'
 test_default_merge
 test_manual_provider_cleanup
+test_ccr_flattened_provider_refresh
 test_dry_run
 test_agent_dir_discovery
 test_probe_failure_is_non_destructive
@@ -536,5 +615,6 @@ test_partial_model_availability
 test_dynamic_model_discovery
 test_catalog_failure_is_atomic
 test_inline_token_toml_escaping
+test_jd_ccr_config_builder
 test_mode_validation
 printf '1..%d\n' "${TEST_COUNT}"

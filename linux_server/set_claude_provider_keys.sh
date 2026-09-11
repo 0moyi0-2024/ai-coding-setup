@@ -160,6 +160,56 @@ cleanup_temp_dir() {
   esac
 }
 
+render_codex_launcher() {
+  local real_codex_bin=$1
+  {
+    printf '#!/usr/bin/env bash\nset -Eeuo pipefail\n'
+    printf '[[ ! -r %q ]] || source %q\n' "${AGENT_ENV_FILE}" "${AGENT_ENV_FILE}"
+    printf 'export CODEX_HOME=%q\n' "${CODEX_DIR}"
+    printf '[[ ! -r %q ]] || source %q\n' "${CODEX_ENV_FILE}" "${CODEX_ENV_FILE}"
+    printf 'readonly AI_SETUP_CODEX_REAL_BIN=%q\n' "${real_codex_bin}"
+    cat <<'LAUNCHER'
+ai_setup_has_profile=0
+ai_setup_resume_command=0
+ai_setup_session_id=''
+for ai_setup_arg in "$@"; do
+  case "${ai_setup_arg}" in
+    -p|--profile|--profile=*) ai_setup_has_profile=1 ;;
+    resume|fork) ai_setup_resume_command=1 ;;
+  esac
+  if ((ai_setup_resume_command)) &&
+     [[ -z "${ai_setup_session_id}" &&
+        "${ai_setup_arg}" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+    ai_setup_session_id=${ai_setup_arg}
+  fi
+done
+if (( ! ai_setup_has_profile )) && [[ -n "${ai_setup_session_id}" ]]; then
+  ai_setup_session_file=$(find "${CODEX_HOME}/sessions" -type f \
+    -name "rollout-*-${ai_setup_session_id}.jsonl" -print -quit 2>/dev/null || true)
+  if [[ -n "${ai_setup_session_file}" && -r "${ai_setup_session_file}" ]]; then
+    IFS= read -r ai_setup_session_meta <"${ai_setup_session_file}" || true
+    ai_setup_session_provider=$(jq -r \
+      'if .type == "session_meta" then (.payload.model_provider // "") else "" end' \
+      <<<"${ai_setup_session_meta}" 2>/dev/null || true)
+    case "${ai_setup_session_provider}" in
+      volcano-ai-gateway) ai_setup_session_profile=volcano ;;
+      bailian) ai_setup_session_profile=bailian ;;
+      blackaicoding-gpt) ai_setup_session_profile=blackai-gpt ;;
+      blackaicoding-claude) ai_setup_session_profile=blackai-claude ;;
+      jd) ai_setup_session_profile=jd ;;
+      *) ai_setup_session_profile='' ;;
+    esac
+    if [[ -n "${ai_setup_session_profile}" &&
+          -r "${CODEX_HOME}/${ai_setup_session_profile}.config.toml" ]]; then
+      exec "${AI_SETUP_CODEX_REAL_BIN}" --profile "${ai_setup_session_profile}" "$@"
+    fi
+  fi
+fi
+exec "${AI_SETUP_CODEX_REAL_BIN}" "$@"
+LAUNCHER
+  }
+}
+
 write_runtime_files() {
   local env_content claude_launcher codex_launcher ccr_launcher jd_token env_mode=644
   jd_token=${JD_GATEWAY_TOKEN:-}
@@ -199,11 +249,7 @@ write_runtime_files() {
     "${NODE_INSTALL_DIR}/bin/claude"
   write_public_executable_file "${AGENT_BIN_DIR}/claude" "${claude_launcher}"
 
-  printf -v codex_launcher \
-    '#!/usr/bin/env bash\n[[ ! -r %q ]] || source %q\nexport CODEX_HOME=%q\n[[ ! -r %q ]] || source %q\nexec %q "$@"' \
-    "${AGENT_ENV_FILE}" "${AGENT_ENV_FILE}" "${CODEX_DIR}" \
-    "${CODEX_ENV_FILE}" "${CODEX_ENV_FILE}" \
-    "${NODE_INSTALL_DIR}/bin/codex"
+  codex_launcher=$(render_codex_launcher "${NODE_INSTALL_DIR}/bin/codex")
   write_public_executable_file "${AGENT_BIN_DIR}/codex" "${codex_launcher}"
 
   printf -v ccr_launcher \
@@ -1348,6 +1394,8 @@ build_ccr_config() {
   local volcano_pro_model=${12}
   local blackai_claude_key=${13:-}
   local blackai_claude_models=${14:-'[]'}
+  local blackai_gpt_key=${15:-}
+  local blackai_gpt_models=${16:-'[]'}
 
   jq \
     --arg local_key "${local_key}" \
@@ -1363,6 +1411,8 @@ build_ccr_config() {
     --arg volcano_pro_model "${volcano_pro_model}" \
     --arg blackai_claude_key "${blackai_claude_key}" \
     --argjson blackai_claude_models "${blackai_claude_models}" \
+    --arg blackai_gpt_key "${blackai_gpt_key}" \
+    --argjson blackai_gpt_models "${blackai_gpt_models}" \
     --arg claude_settings_file "${CLAUDE_SETTINGS_FILE}" \
     --arg codex_home "${CODEX_DIR}" \
     '.value as $cfg
@@ -1371,9 +1421,11 @@ build_ccr_config() {
      | ([$cfg.Providers[]? | select(.id == "zhipu" or .name == "蓝区智谱")][0].apiKey // "") as $old_zhipu
      | ([$cfg.Providers[]? | select(.id == "xiyu" or .name == "蓝区稀宇")][0].apiKey // "") as $old_xiyu
      | ([$cfg.Providers[]? | select(.id == "blackai-claude" or .name == "BlackAI Claude")][0].apiKey // "") as $old_blackai_claude
+     | ([$cfg.Providers[]? | select(.id == "blackai-gpt" or .name == "BlackAI GPT")][0].apiKey // "") as $old_blackai_gpt
      | (if $volcano_key != "" then $volcano_key else $old_volcano end) as $volcano
      | (if $bailian_key != "" then $bailian_key else $old_bailian end) as $bailian
      | (if $blackai_claude_key != "" then $blackai_claude_key else $old_blackai_claude end) as $blackai_claude
+     | (if $blackai_gpt_key != "" then $blackai_gpt_key else $old_blackai_gpt end) as $blackai_gpt
      | ($cfg // {})
      | .profile = (.profile // {})
      | .profile.profiles = (.profile.profiles // [])
@@ -1394,6 +1446,7 @@ build_ccr_config() {
            (.id != "zhipu" and .name != "蓝区智谱") and
            (.id != "xiyu" and .name != "蓝区稀宇")
            and (.id != "blackai-claude" and .name != "BlackAI Claude")
+           and (.id != "blackai-gpt" and .name != "BlackAI GPT")
          )] +
          [{
            id:"volcano-ai-gateway", name:"火山AI网关",
@@ -1407,6 +1460,12 @@ build_ccr_config() {
            baseUrl:"https://dashscope.aliyuncs.com/compatible-mode/v1",
            apiKey:$bailian, type:"openai_chat_completions",
            models:$bailian_models
+         },{
+           id:"blackai-gpt", name:"BlackAI GPT",
+           enabled:($blackai_gpt != "" and ($blackai_gpt_models | length) > 0),
+           baseUrl:"https://www.blackaicoding.com/v1",
+           apiKey:$blackai_gpt, type:"openai_responses",
+           models:$blackai_gpt_models
          },{
            id:"blackai-claude", name:"BlackAI Claude",
            enabled:($blackai_claude != "" and ($blackai_claude_models | length) > 0),
@@ -1489,7 +1548,9 @@ configure_ccr() {
     "${volcano_fast_model}" \
     "${volcano_pro_model}" \
     "${BLACKAICODING_CLAUDE_API_KEY:-}" \
-    "${BLACKAI_CLAUDE_MODELS}")
+    "${BLACKAI_CLAUDE_MODELS}" \
+    "${BLACKAICODING_GPT_API_KEY:-}" \
+    "${BLACKAI_GPT_MODELS}")
   save_ccr_config "${config}"
 
   restart_ccr_gateway

@@ -500,7 +500,9 @@ test_ccr_config_builder() {
     'deepseek-v4-flash' \
     'deepseek-v4-pro' \
     'new-blackai-claude' \
-    '["claude-sonnet-4-6","claude-fable-5"]')
+    '["claude-sonnet-4-6","claude-fable-5"]' \
+    'new-blackai-gpt' \
+    '["gpt-5.6-sol","gpt-5.6-terra"]')
   assert_json "${config}" '.APIKEY == "new-local"' "set CCR local key"
   assert_json "${config}" '.gateway.port == 3456 and .gateway.corePort == 3457' "set CCR ports"
   assert_json "${config}" '[.Providers[] | select(.id == "custom")] | length == 1' "preserve custom provider"
@@ -508,6 +510,7 @@ test_ccr_config_builder() {
   assert_json "${config}" '[.Providers[] | select(.id == "volcano-ai-gateway")][0].models == ["deepseek-v4-flash","deepseek-v4-pro"]' "use discovered Volcano models"
   assert_json "${config}" '[.Providers[] | select(.id == "bailian")][0].models == ["qwen3.7-plus"]' "use discovered Bailian models"
   assert_json "${config}" '[.Providers[] | select(.id == "blackai-claude" and .apiKey == "new-blackai-claude")][0].models == ["claude-sonnet-4-6","claude-fable-5"]' "use discovered BlackAI Claude models"
+  assert_json "${config}" '[.Providers[] | select(.id == "blackai-gpt" and .apiKey == "new-blackai-gpt" and .type == "openai_responses")][0].models == ["gpt-5.6-sol","gpt-5.6-terra"]' "use discovered BlackAI GPT models in the unified CCR catalog"
   assert_json "${config}" '.profile.profiles[] | select(.agent == "claude-code") | .opusModel == "火山AI网关/deepseek-v4-pro"' "update Claude profile"
   pass "CCR configuration rendering"
 }
@@ -659,6 +662,53 @@ test_agent_layout() {
   [[ -x "${AGENT_BIN_DIR}/claude" && -x "${AGENT_BIN_DIR}/codex" &&
      -x "${AGENT_BIN_DIR}/ccr" ]] || fail "container-local launchers"
   pass "simple container-local agent layout"
+}
+
+test_codex_resume_uses_jd_profile() {
+  local jd_session_id='11111111-1111-4111-8111-111111111111'
+  local volcano_session_id='22222222-2222-4222-8222-222222222222'
+  local ccr_session_id='44444444-4444-4444-8444-444444444444'
+  local session_dir="${CODEX_DIR}/sessions/2026/09/11"
+  local output expected
+  mkdir -p "${NODE_INSTALL_DIR}/bin" "${session_dir}"
+  cat >"${NODE_INSTALL_DIR}/bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+printf '%s\n' "$@"
+FAKE_CODEX
+  chmod 700 "${NODE_INSTALL_DIR}/bin/codex"
+  printf '%s\n' 'model_provider = "jd"' >"${CODEX_DIR}/jd.config.toml"
+  printf '%s\n' 'model_provider = "volcano-ai-gateway"' >"${CODEX_DIR}/volcano.config.toml"
+  printf '%s\n' \
+    '{"type":"session_meta","payload":{"model_provider":"jd"}}' \
+    >"${session_dir}/rollout-test-${jd_session_id}.jsonl"
+  printf '%s\n' \
+    '{"type":"session_meta","payload":{"model_provider":"volcano-ai-gateway"}}' \
+    >"${session_dir}/rollout-test-${volcano_session_id}.jsonl"
+  printf '%s\n' \
+    '{"type":"session_meta","payload":{"model_provider":"claude-code-router"}}' \
+    >"${session_dir}/rollout-test-${ccr_session_id}.jsonl"
+
+  write_runtime_files
+  output=$("${AGENT_BIN_DIR}/codex" resume "${jd_session_id}")
+  expected=$(printf '%s\n' --profile jd resume "${jd_session_id}")
+  assert_eq "${expected}" "${output}" \
+    "bare resume automatically layers the JD profile"
+
+  output=$("${AGENT_BIN_DIR}/codex" resume "${volcano_session_id}")
+  expected=$(printf '%s\n' --profile volcano resume "${volcano_session_id}")
+  assert_eq "${expected}" "${output}" \
+    "bare resume automatically layers the original Volcano profile"
+
+  output=$("${AGENT_BIN_DIR}/codex" resume "${volcano_session_id}" --profile jd)
+  expected=$(printf '%s\n' resume "${volcano_session_id}" --profile jd)
+  assert_eq "${expected}" "${output}" \
+    "explicit JD profile overrides the original session provider"
+
+  output=$("${AGENT_BIN_DIR}/codex" resume "${ccr_session_id}")
+  expected=$(printf '%s\n' resume "${ccr_session_id}")
+  assert_eq "${expected}" "${output}" \
+    "CCR resume keeps the base launcher behavior"
+  pass "Codex resume selects the original profile and honors explicit overrides"
 }
 
 test_setup_user_ownership() {
@@ -1116,6 +1166,7 @@ test_completion_hint() {
 
 require_command jq
 test_agent_layout
+test_codex_resume_uses_jd_profile
 test_setup_user_ownership
 test_runtime_environment_path_idempotence
 test_bash_startup_configuration

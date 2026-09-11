@@ -189,7 +189,9 @@ ccr status
 ## 使用 Codex
 
 Codex 会把已配置 token 对应的 provider 注册到全局配置，同时为每个 token 保留独立
-profile。支持完整 Codex 工具协议的网关可以直接使用对应的 `--profile`：
+profile。普通 `codex` 通过 CCR 使用统一模型列表；已启用的火山、百炼、BlackAI GPT 和
+BlackAI Claude/Grok 模型会以 `网关名/模型名` 展示。支持完整 Codex 工具协议的网关也可以
+直接使用对应的 `--profile`：
 
 ```bash
 codex --profile volcano
@@ -226,10 +228,14 @@ bash ./set_jd_gateway_config.sh
 ```
 
 `--merge` 与默认行为相同，可在自动化命令中显式使用。这个模式不会修改 Claude 的主
-`settings.json`，也不会改变 Codex 主配置中的默认 provider、模型和已有网关。它只向
-Codex 主配置追加一个不含 token 的 JD provider 注册，使 JD 会话之后可以直接使用
-`codex resume`。已保存过 token 时，交互运行可直接按 Enter 保留原值；非交互运行会优先
-使用当前环境中的值，否则复用 `/agent/env.sh` 中保存的值。
+`settings.json`，也不会改变 Codex 主配置中的默认 provider、默认模型和已有网关。它会向
+Codex 主配置追加一个不含 token 的 JD provider 注册，并把已验证的 JD 模型追加到 CCR 的
+统一模型列表，使普通 `codex` 的 `/model` 同时显示原有网关和 `京东网关/...` 模型。
+安装器生成的 `codex` 启动器会读取显式会话 ID 的元数据，并按原会话的
+provider 自动叠加 `volcano`、`bailian`、`blackai-gpt`、`blackai-claude` 或 `jd` profile，
+使 `/model` 显示对应网关的 catalog。命令中显式提供的 `--profile` 优先，可以用另一个网关
+继续已有会话。已保存过 token 时，交互运行可直接按 Enter 保留原值；非交互运行会优先使用
+当前环境中的值，否则复用 `/agent/env.sh` 中保存的值。
 
 - Codex 会生成独立 profile 文件：`$CODEX_HOME/jd.config.toml`。未设置 `CODEX_HOME`
   时，本安装器环境写入 `/agent/config/codex/jd.config.toml`；普通环境写入
@@ -238,8 +244,34 @@ Codex 主配置追加一个不含 token 的 JD provider 注册，使 JD 会话�
   的 JD 模型，不会继承全局配置里的火山模型。JD catalog 使用标准 Responses 历史格式，
   因此从其他 provider 切换或恢复的长会话不会携带 JD 网关不支持的 Responses Lite 项。
 - `$CODEX_HOME/config.toml` 只增加带受管标记的 `[model_providers.jd]` 注册；不会改变原来的
-  `model_provider`、`model`、CCR 配置或其他 provider。这个注册使不带 `--profile jd` 的
-  `codex resume <JD会话ID>` 也能识别会话中保存的 JD provider。
+  `model_provider`、`model` 或其他 provider。CCR 中会追加或更新同一个 JD provider，并保留
+  已有 provider 和默认路由。这个注册使不带 `--profile jd` 的
+  `codex resume <JD会话ID>` 也能识别会话中保存的 JD provider。`codex` 启动器会进一步
+  自动转换为等效的 `codex --profile jd resume <JD会话ID>`，因此恢复后 `/model` 使用
+  `catalogs/jd.json`，不会回到基础配置的火山模型列表。
+
+恢复会话时可以保留原网关，也可以显式切换网关：
+
+```bash
+# 按会话原来的 provider 加载对应模型列表
+codex resume <会话ID>
+
+# 使用 JD 网关继续已有会话；两种写法等价
+codex resume <会话ID> --profile jd
+codex --profile jd resume <会话ID>
+```
+
+普通启动时也可以直接从统一列表选 JD：
+
+```bash
+codex
+# 进入后执行 /model，选择 京东网关/GPT-...
+```
+
+通过统一列表启动的会话会记录 `claude-code-router` provider 和带网关前缀的模型名；裸
+`resume` 会继续通过 CCR 路由到原来的网关。通过独立 profile 启动的会话会记录对应的直接
+provider；启动器会在裸 `resume <会话ID>` 时自动恢复相应 profile。
+
 - 安装器布局中，脚本把 `JD_GATEWAY_TOKEN` 直接追加到 `/agent/env.sh` 的受管区块，并把
   文件权限设置为 `600`；不会另外生成 `jd.env`。主安装器以后重写 `/agent/env.sh` 时会
   读取并保留这个值。当前已打开的 shell 需要执行一次：
@@ -300,8 +332,8 @@ bash ./set_jd_gateway_config.sh --dry-run --no-probe
 `--standalone` 会在输出目录生成 `claude-settings.json` 和 `codex-config.toml`。
 `--merge` 和 `--standalone` 不能同时使用。默认追加模式不会修改 Claude 的
 `settings.json` 或 Codex 的默认路由，只更新 `/agent/env.sh` 的 JD 变量、在 Codex 主配置
-中注册不含 token 的 JD provider，并维护 `jd.config.toml`、模型 catalog 和
-`/agent/bin/claude-jd` 启动器。Codex 当前通过独立
+中注册不含 token 的 JD provider、在 CCR 中追加 JD provider，并维护 `jd.config.toml`、
+模型 catalog 和 `/agent/bin/claude-jd` 启动器。Codex 当前通过独立
 `<profile>.config.toml` 实现 `--profile`，因此 `jd.config.toml` 是必须保留的 profile 文件。
 
 ### token 和权限
@@ -311,10 +343,16 @@ bash ./set_jd_gateway_config.sh --dry-run --no-probe
 则写入 `~/.bashrc` 或 `~/.zshrc` 的受管区块。交互输入 token 后通常不需要再手动
 `export`。当前已打开的安装器 shell 需要执行一次 `source /agent/env.sh`。
 
-如果在 `--codex-only` 模式明确选择 `--inline-token`，token 会写入 TOML 而不修改环境文件；
-Claude 同时启用时仍需要环境中的 JD token。选择 `--no-save-token` 时不保存
-token，也不修改 `/agent/env.sh` 或 shell 配置。包含 token 的 `/agent/env.sh` 和生成的
-配置文件权限都是 `600`。不要把 token 或生成文件内容粘贴到聊天、日志、工单或代码仓库中。
+为了让普通 `codex` 的 CCR 统一模型列表能够实际转发 JD 请求，CCR 还会把 JD 上游凭据
+保存在自己的本地数据目录 `/agent/home/.claude-code-router/config.sqlite`。这是 CCR 的
+provider 凭据存储机制；目录和数据库应只允许安装用户访问。`jd.config.toml` 仍只保存
+`env_key`，不会出现明文 token。
+
+如果在 `--codex-only` 模式明确选择 `--inline-token`，token 会写入 TOML；Claude 同时启用时
+仍需要环境中的 JD token。选择 `--no-save-token` 时不修改 `/agent/env.sh` 或 shell 配置，
+同时也不会把 JD 注册进 CCR 的默认统一列表；此时需在当前 shell 设置 `JD_GATEWAY_TOKEN`
+并使用 `codex --profile jd`。包含 token 的 `/agent/env.sh` 和生成的配置文件权限都是 `600`。
+不要把 token 或生成文件内容粘贴到聊天、日志、工单或代码仓库中。
 
 ### 模型自动发现和验证
 
@@ -366,9 +404,10 @@ jq -r '.models[].slug' "/agent/config/codex/catalogs/jd.json"
 
 ## 以后如何重新运行
 
-主安装器重跑时会刷新 Claude 的 CCR 配置，同时从已有 `/agent/env.sh` 保留 JD token；
-`jd.config.toml`、`catalogs/jd.json` 和 `claude-jd` 也不会被删除。因此普通 `claude`
-继续使用 CCR，`claude-jd` 和 `codex --profile jd` 继续使用 JD，两者互不覆盖。
+主安装器重跑时会刷新 CCR 中的四个基础 provider，并保留已追加的 JD provider；同时从
+已有 `/agent/env.sh` 保留 JD token，`jd.config.toml`、`catalogs/jd.json` 和 `claude-jd`
+也不会被删除。因此普通 `claude` 和普通 `codex` 继续使用 CCR 统一路由，`claude-jd` 和
+`codex --profile jd` 仍可绕过 CCR 直接使用 JD，两种入口互不覆盖。
 
 只更新 token、端口和模型配置，不重新安装工具：
 
