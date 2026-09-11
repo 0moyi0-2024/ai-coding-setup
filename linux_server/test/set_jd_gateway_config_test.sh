@@ -99,9 +99,23 @@ TOML
     bash "${SCRIPT_PATH}" --no-probe 2>&1)
 
   [[ "${output}" != *"${TEST_TOKEN}"* ]] || fail 'token leaked to installer output'
-  cmp "${install_root}/original-config.toml" \
-    <(head -c "$(stat -c '%s' "${install_root}/original-config.toml")" "${codex_dir}/config.toml") \
-    >/dev/null || fail 'existing Codex defaults changed while registering JD provider'
+  grep -Fq '# BEGIN JD gateway defaults' "${codex_dir}/config.toml" ||
+    fail 'Codex main config is missing the managed JD default block'
+  grep -Fq 'model = "GPT-5.6-Sol-joybuilder"' "${codex_dir}/config.toml" ||
+    fail 'Codex main config did not switch to the selected JD model'
+  grep -Fq 'model_provider = "jd"' "${codex_dir}/config.toml" ||
+    fail 'Codex main config did not switch its default provider to JD'
+  grep -Fq "model_catalog_json = \"${codex_dir}/catalogs/jd.json\"" \
+    "${codex_dir}/config.toml" || fail 'Codex main config does not use the JD catalog'
+  grep -Fq 'model_reasoning_effort = "xhigh"' "${codex_dir}/config.toml" ||
+    fail 'Codex main config does not use a supported JD reasoning level'
+  grep -Fq 'plan_mode_reasoning_effort = "max"' "${codex_dir}/config.toml" ||
+    fail 'Codex main config does not use the JD plan-mode reasoning level'
+  grep -Fq '[custom]' "${codex_dir}/config.toml" &&
+    grep -Fq 'keep = true' "${codex_dir}/config.toml" ||
+    fail 'switching the Codex default removed unrelated configuration'
+  [[ "$(grep -Ec '^model[[:space:]]*=' "${codex_dir}/config.toml")" -eq 1 ]] ||
+    fail 'Codex main config contains duplicate top-level model keys'
   assert_file_mode 600 "${codex_dir}/jd.config.toml"
   assert_file_mode 600 "${codex_dir}/catalogs/jd.json"
   jq -e 'all(.models[]; .use_responses_lite == false)' \
@@ -125,7 +139,7 @@ TOML
     fail 'JD profile does not use the Volcano approval policy'
   grep -Fq 'sandbox_mode = "danger-full-access"' "${codex_dir}/jd.config.toml" ||
     fail 'JD profile does not use the Volcano sandbox mode'
-  grep -Fq 'models = ["GPT-5.6-Terra-joybuilder", "GPT-5.6-Sol-joybuilder"]' \
+  grep -Fq 'models = ["GPT-5.6-Terra-joybuilder", "GPT-5.6-Sol-joybuilder", "GPT-5.5-joybuilder", "GPT-5.6-Luna-joybuilder", "GPT-6-Astra-joybuilder"]' \
     "${codex_dir}/jd.config.toml" || fail 'JD profile model list is missing'
   [[ "$(grep -Fxc '[model_providers.jd]' "${codex_dir}/config.toml")" -eq 1 ]] ||
     fail 'Codex main config does not contain exactly one JD provider registration'
@@ -179,6 +193,8 @@ TOML
     fail 'rerun duplicated the shell startup block'
   [[ "$(grep -Fxc '# BEGIN JD gateway provider' "${codex_dir}/config.toml")" -eq 1 ]] ||
     fail 'rerun duplicated the Codex JD provider registration'
+  [[ "$(grep -Fxc '# BEGIN JD gateway defaults' "${codex_dir}/config.toml")" -eq 1 ]] ||
+    fail 'rerun duplicated the Codex JD defaults block'
   cmp "${install_root}/first-bashrc" "${user_home}/.bashrc" >/dev/null ||
     fail 'rerun changed shell startup bytes while reusing the same token'
   cmp "${install_root}/first-config.toml" "${codex_dir}/config.toml" >/dev/null ||
@@ -201,7 +217,7 @@ TOML
   [[ "${saved_token}" == "${replacement_token}" ]] ||
     fail 'explicit JD_GATEWAY_TOKEN did not replace the saved token'
 
-  pass 'default append preserves existing defaults and registers JD for session resume'
+  pass 'default append switches Codex to JD while preserving Claude and unrelated settings'
 }
 
 test_manual_provider_cleanup() {
@@ -275,13 +291,17 @@ TOML
     fail 'CCR-flattened JD provider was duplicated'
   grep -Fq '# BEGIN JD gateway provider' "${codex_dir}/config.toml" ||
     fail 'CCR-flattened JD provider was not returned to a managed block'
-  grep -Fq 'models = ["GPT-5.6-Terra-joybuilder", "GPT-5.6-Sol-joybuilder"]' \
+  grep -Fq 'models = ["GPT-5.6-Terra-joybuilder", "GPT-5.6-Sol-joybuilder", "GPT-5.5-joybuilder", "GPT-5.6-Luna-joybuilder", "GPT-6-Astra-joybuilder"]' \
     "${codex_dir}/config.toml" || fail 'CCR-flattened JD provider models were not refreshed'
   grep -Fq '# BEGIN CCR managed Codex provider' "${codex_dir}/config.toml" ||
     fail 'refreshing the JD provider removed the CCR block marker'
   grep -Fq '[model_providers.claude-code-router]' "${codex_dir}/config.toml" ||
     fail 'refreshing the JD provider removed the CCR provider'
-  pass 'CCR-flattened generated JD provider is refreshed safely'
+  grep -Fq 'model_provider = "jd"' "${codex_dir}/config.toml" ||
+    fail 'refreshing the JD provider did not make JD the Codex default'
+  grep -Fq "model_catalog_json = \"${codex_dir}/catalogs/jd.json\"" \
+    "${codex_dir}/config.toml" || fail 'refreshed Codex default does not use the JD catalog'
+  pass 'CCR-flattened generated JD provider is refreshed and selected safely'
 }
 
 test_dry_run() {
@@ -333,6 +353,11 @@ FAKE_NODE_CODEX
 
   [[ -f "${agent_dir}/config/codex/jd.config.toml" ]] ||
     fail 'AI_SETUP_AGENT_DIR Codex profile was not discovered'
+  grep -Fq 'model_provider = "jd"' "${agent_dir}/config/codex/config.toml" ||
+    fail 'AI_SETUP_AGENT_DIR Codex default provider was not switched to JD'
+  grep -Fq "model_catalog_json = \"${agent_dir}/config/codex/catalogs/jd.json\"" \
+    "${agent_dir}/config/codex/config.toml" ||
+    fail 'AI_SETUP_AGENT_DIR Codex default catalog was not switched to JD'
   [[ ! -e "${agent_dir}/config/claude/jd.settings.json" ]] ||
     fail 'AI_SETUP_AGENT_DIR generated a separate Claude settings file'
   [[ -x "${agent_dir}/bin/claude-jd" ]] ||
@@ -397,22 +422,12 @@ test_partial_model_availability() {
   make_fake_codex "${fake_bin}"
   cat >"${fake_bin}/curl" <<'FAKE_CURL'
 #!/usr/bin/env bash
-payload=''
-url=''
-while (($#)); do
-  case "$1" in
-    --data-binary) payload=$2; shift 2 ;;
-    http://*|https://*) url=$1; shift ;;
-    *) shift ;;
+for argument in "$@"; do
+  case "${argument}" in
+    *Claude-Sonnet-5-joybuilder*|*GPT-5.6-Terra-joybuilder*) printf '200'; exit 0 ;;
   esac
 done
-case "${payload}" in
-  *Claude-Sonnet-5-joybuilder*|*GPT-5.6-Terra-joybuilder*) printf '200' ;;
-  *GPT-5.6-Sol-joybuilder*)
-    [[ "${url}" == */responses ]] && printf '200' || printf '400'
-    ;;
-  *) printf '404' ;;
-esac
+printf '404'
 FAKE_CURL
   chmod 700 "${fake_bin}/curl"
 
@@ -477,7 +492,7 @@ if [[ "${url}" == */models ]]; then
   "data": [
     {"id": "Claude-Opus-4.9-joybuilder"},
     {"id": "Claude-Sonnet-5.1-joybuilder"},
-    {"id": "GPT-6-Astra-joybuilder"},
+    {"id": "GPT-5.6-Sol-joybuilder"},
     {"id": "DeepSeek-V4-Pro-joybuilder"},
     {"id": "GPT-invalid model name"}
   ]
@@ -516,7 +531,7 @@ FAKE_CURL
     fail 'dynamically discovered Claude models were not configured'
   grep -Fq 'model = "GPT-6-Astra-joybuilder"' \
     "${output_root}/.codex/jd.config.toml" ||
-    fail 'dynamically discovered Codex model was not selected'
+    fail 'known GPT-6 candidate omitted by /models was not selected after a successful probe'
   grep -Fq 'models = ["GPT-6-Astra-joybuilder"]' \
     "${output_root}/.codex/jd.config.toml" ||
     fail 'Codex profile retained unavailable or unrelated discovered models'
@@ -525,12 +540,12 @@ FAKE_CURL
     and .[0].slug == "GPT-6-Astra-joybuilder"
     and .[0].use_responses_lite == false
   ' "${output_root}/.codex/catalogs/jd.json" >/dev/null ||
-    fail 'Codex catalog does not contain the validated dynamically discovered model'
+    fail 'Codex catalog does not contain the validated GPT-6 fallback candidate'
   ! grep -R -Fq 'DeepSeek-V4-Pro-joybuilder' "${output_root}" ||
     fail 'model discovery mixed an unrelated family into JD profiles'
   ! grep -R -Fq 'GPT-invalid model name' "${output_root}" ||
     fail 'model discovery accepted an unsafe model identifier'
-  pass 'model list discovery adds new Claude and Codex models after protocol validation'
+  pass 'model discovery and active probing recover models omitted by /models'
 }
 
 test_catalog_failure_is_atomic() {
@@ -583,24 +598,18 @@ PY
   pass 'inline token is escaped as valid TOML'
 }
 
-test_jd_ccr_runtime_model_validation() {
-  local response
-  response='{"data":[{"id":"火山AI网关/deepseek-v4-pro"},{"id":"京东网关/GPT-5.6-Sol-joybuilder"},"京东网关/GPT-6-Astra-joybuilder"]}'
-  if ! bash -c 'source "$1"; ccr_response_contains_jd_models "$2" "$3"' bash \
-      "${SCRIPT_PATH}" "${response}" \
-      '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]'; then
-    fail 'JD CCR runtime validation rejected the complete model list'
-  fi
-  if bash -c 'source "$1"; ccr_response_contains_jd_models "$2" "$3"' bash \
-      "${SCRIPT_PATH}" "${response}" \
-      '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder","GPT-missing"]'; then
-    fail 'JD CCR runtime validation accepted a missing model'
-  fi
-  if bash -c 'source "$1"; ccr_response_contains_jd_models "$2" "$3"' bash \
-      "${SCRIPT_PATH}" '{"data":[]}' '["GPT-5.6-Sol-joybuilder"]'; then
-    fail 'JD CCR runtime validation accepted a stale catalog without a runtime provider'
-  fi
-  pass 'JD CCR runtime model validation rejects catalog/provider drift'
+test_jd_ccr_update_keeps_default_route() {
+  local config
+  config=$(TOKEN='new-jd-token' CODEX_BASE_URL='http://llm-gw.jd.local/v1' \
+    bash -c 'source "$1"; TOKEN=$2; CODEX_BASE_URL=$3; build_jd_ccr_config "$4" "$5"' bash \
+      "${SCRIPT_PATH}" 'new-jd-token' 'http://llm-gw.jd.local/v1' \
+      '{"ok":true,"value":{"preferredProvider":"火山AI网关","defaultOpenAIModel":"deepseek-v4-flash","Providers":[{"id":"volcano-ai-gateway","name":"火山AI网关"}]}}' \
+      '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]')
+  jq -e '.preferredProvider == "火山AI网关"
+    and .defaultOpenAIModel == "deepseek-v4-flash"
+    and ([.Providers[] | select(.id == "volcano-ai-gateway")] | length == 1)' \
+    <<<"${config}" >/dev/null || fail 'JD registration changed the existing CCR default route'
+  pass 'JD CCR registration preserves the default Volcano route'
 }
 
 test_jd_ccr_config_builder() {
@@ -608,7 +617,7 @@ test_jd_ccr_config_builder() {
   config=$(TOKEN='new-jd-token' CODEX_BASE_URL='http://llm-gw.jd.local/v1' \
     bash -c 'source "$1"; TOKEN=$2; CODEX_BASE_URL=$3; build_jd_ccr_config "$4" "$5"' bash \
       "${SCRIPT_PATH}" 'new-jd-token' 'http://llm-gw.jd.local/v1' \
-      '{"ok":true,"value":{"Providers":[{"id":"custom","name":"Custom"},{"id":"blackai-claude","name":"blackai-claude"},{"id":"jd","name":"JD LLM Gateway","apiKey":"old","models":["old"]},{"id":"bailian","name":"bailian"},{"id":"volcano-ai-gateway","name":"volcano-ai-gateway"},{"id":"blackai-gpt","name":"blackai-gpt"}]}}' \
+      '{"ok":true,"value":{"Providers":[{"id":"custom","name":"Custom"},{"id":"jd","name":"JD LLM Gateway","apiKey":"old","models":["old"]}]}}' \
       '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]')
   jq -e '[.Providers[] | select(.id == "custom")] | length == 1' <<<"${config}" >/dev/null ||
     fail 'JD CCR merge did not preserve unrelated providers'
@@ -616,19 +625,12 @@ test_jd_ccr_config_builder() {
     fail 'JD CCR merge produced duplicate providers'
   jq -e '[.Providers[] | select(.id == "jd")][0]
     | .name == "京东网关"
-      and .type == "openai_chat_completions"
+      and .type == "openai_responses"
       and .baseUrl == "http://llm-gw.jd.local/v1"
       and .apiKey == "new-jd-token"
       and .models == ["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]' \
     <<<"${config}" >/dev/null || fail 'JD CCR provider was rendered incorrectly'
-  jq -e '[.Providers[] | select(.id == "volcano-ai-gateway" or .id == "bailian" or .id == "blackai-gpt" or .id == "blackai-claude" or .id == "jd") | .id] == ["volcano-ai-gateway","bailian","blackai-gpt","blackai-claude","jd"]' \
-    <<<"${config}" >/dev/null || fail 'JD CCR merge did not preserve the five-gateway priority order'
-  jq -e '[.Providers[] | select(.id == "volcano-ai-gateway")][0].name == "火山AI网关"
-    and [.Providers[] | select(.id == "bailian")][0].name == "蓝区百炼"
-    and [.Providers[] | select(.id == "blackai-gpt")][0].name == "BlackAI GPT"
-    and [.Providers[] | select(.id == "blackai-claude")][0].name == "BlackAI Claude"' \
-    <<<"${config}" >/dev/null || fail 'JD CCR merge did not normalize provider display names'
-  pass 'JD provider merges into the unified CCR configuration'
+  pass 'JD provider is appended to CCR without replacing other providers'
 }
 
 test_mode_validation() {
@@ -652,7 +654,7 @@ test_partial_model_availability
 test_dynamic_model_discovery
 test_catalog_failure_is_atomic
 test_inline_token_toml_escaping
-test_jd_ccr_runtime_model_validation
+test_jd_ccr_update_keeps_default_route
 test_jd_ccr_config_builder
 test_mode_validation
 printf '1..%d\n' "${TEST_COUNT}"

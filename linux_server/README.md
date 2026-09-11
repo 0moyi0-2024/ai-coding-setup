@@ -1,164 +1,62 @@
-# AI 编程工具使用说明
+# Linux AI 编程环境安装说明
 
-此操作手册与 `set_claude_provider_keys.sh` 和它的测试脚本配套使用。
+本目录提供两个脚本：
 
-Claude Code、Codex、Claude Code Router（CCR）、Node.js、配置和缓存都放在
-当前容器的 `/agent` 目录中。
+- `set_claude_provider_keys.sh`：基础安装。安装或更新 Claude Code、Codex、Claude Code Router（CCR），并配置火山、百炼、BlackAI GPT、BlackAI Claude/Grok。
+- `set_jd_gateway_config.sh`：JD 内网附加配置。在基础安装之上增加 JD，不覆盖已有网关，并把普通 Codex 的默认网关切到 JD。
 
-本目录结构：
+所有运行文件默认放在 `/agent`：
 
 ```text
-linux_server/
-├── README.md
-├── set_claude_provider_keys.sh
-├── set_jd_gateway_config.sh
-├── dsh_server/
-│   ├── start_dsh_service.sh
-│   └── README.md
-└── test/
-    ├── set_claude_provider_keys_test.sh
-    └── set_jd_gateway_config_test.sh
+/agent/
+├── bin/                    # claude、codex、ccr、claude-jd 启动器
+├── node/                   # Node.js 和 npm 全局包
+├── config/claude/          # Claude Code 主配置
+├── config/codex/           # Codex 主配置、profile、模型 catalog 和 token
+├── home/.claude-code-router/
+├── cache/
+└── env.sh                  # PATH、CODEX_HOME、CLAUDE_CONFIG_DIR、JD token
 ```
 
-`set_claude_provider_keys_test.sh` 默认执行修改代码后的隔离开发测试；加上
-`--installed-codex` 后，用于安装完成后检查当前容器中的真实 Codex 配置。
+## 配置结构
 
-`dsh_server/` 目录用于将 DSH Web 服务注册为 systemd 后台服务，支持开机自启和异常自动重启。详见 [dsh_server/README.md](dsh_server/README.md)。
+基础脚本按 token 动态发现或验证模型，并为每个网关生成独立 Codex catalog。未配置 token、模型列表获取失败或没有可用模型时，不生成该网关的 profile。
 
-## systemd 说明
+| 启动方式 | provider | 显示的模型 |
+| --- | --- | --- |
+| `codex`（未安装 JD） | 本地 CCR，默认路由到火山 | 当前火山 token 验证成功的模型 |
+| `codex`（安装 JD 后） | 直连 JD | 当前 JD token 验证成功的 GPT 模型 |
+| `codex --profile volcano` | 直连火山 | 火山模型 |
+| `codex --profile bailian` | 直连百炼 | 百炼模型 |
+| `codex --profile blackai-gpt` | 直连 BlackAI GPT | BlackAI GPT 模型 |
+| `codex --profile blackai-claude` | 直连 BlackAI Claude/Grok | BlackAI Claude/Grok 模型 |
+| `codex --profile jd` | 直连 JD | JD GPT 模型 |
+| `claude` | 本地 CCR，默认路由到火山 | CCR 中已注册的网关模型 |
+| `claude-jd` | 直连 JD Anthropic 端点 | JD Claude 模型 |
 
-systemd 不是本项目安装的第三方 npm 软件，而是 Linux 中常见的系统初始化和服务管理组件。
-Ubuntu、Debian、Fedora 等发行版通常已经随系统提供；本脚本只调用 `systemctl` 创建和管理服务
-单元，不会重复安装 systemd。
+普通 `codex` 不再合并所有网关模型，也不使用 `火山AI网关/模型名` 或 `京东网关/模型名` 这类显示前缀。这样模型选择与 provider 始终由同一个 profile 决定，避免模型被转发到错误网关。
 
-检查当前环境是否可用：
-
-```bash
-command -v systemctl
-ps -p 1 -o comm=
-systemctl is-system-running
-```
-
-WSL 使用 systemd 需要较新的 WSL 版本，并在 `/etc/wsl.conf` 中启用：
-
-```ini
-[boot]
-systemd=true
-```
-
-修改后需从 Windows 侧执行 `wsl --shutdown`，再重新启动发行版。没有 systemd 的 Linux/WSL
-环境仍可以运行 Claude Code、Codex 和 CCR，但不会自动安装 systemd 服务；CCR 需要手动启动。
-
-## 这套脚本会做什么
-
-脚本会完成以下工作：
-
-1. 缺少时安装 Node.js，并安装或更新 Claude Code、Codex 和 CCR。
-2. 询问并保存你提供的网关 API key，输入内容不会显示在屏幕上。
-3. 根据每个 token 返回的模型列表生成独立配置，避免不同 token 的模型混在一起。
-4. 为 CCR 自动选择空闲端口，并让 Claude Code 通过本地 CCR 调用模型。
-5. 生成 Claude 和 Codex 的启动环境及模型配置。
+基础脚本会把火山设为 CCR 的默认网关。未安装 JD 时，普通 Codex 也默认通过 CCR 使用火山；安装 JD 后，JD 脚本会把普通 Codex 默认切为直连 JD，但普通 Claude 和 CCR 的默认路由仍保持火山。因此基础配置至少需要一个可用的火山 token。
 
 ## 第一次安装
 
-请先进入需要使用这些工具的容器，再进入仓库的 `ai-coding-setup/linux_server` 目录，然后运行：
+进入目录后运行：
 
 ```bash
+cd /path/to/ai-coding-setup/linux_server
 bash ./set_claude_provider_keys.sh
 ```
 
-脚本应由以后实际使用 `claude`、`codex` 和 `ccr` 的用户执行。如果需要使用 root
-安装（例如 `/agent` 只有 root 可写），请明确指定安装用户；通过 `sudo` 执行时脚本会
-自动使用 `SUDO_USER`：
+脚本会依次询问四个网关的 token。输入隐藏；已有值直接回车会保留，未配置的值直接回车会跳过。
+
+安装完成后，在当前 shell 加载环境：
 
 ```bash
-sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh
-```
-
-`AI_SETUP_USER` 会拥有 `/agent/config`、CCR 运行目录、缓存、密钥文件和生成的 Codex
-profile。直接以 root 执行且不设置它时，文件会归 root，普通用户无法读取 `config.toml`；
-这时应重新用上述命令运行，或先执行一次权限修复：
-
-```bash
-sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh --configure-only
-```
-
-默认安装根目录是 `/agent`。如需在无 root 权限的目录中安装或隔离测试，可在运行两个 Linux
-脚本时设置 `AI_SETUP_AGENT_DIR`；例如
-`AI_SETUP_AGENT_DIR="$HOME/agent" bash ./set_claude_provider_keys.sh`。JD 配置脚本会使用同一
-变量查找 Claude、Codex 和公共环境文件。
-
-脚本会依次询问以下四个可选 API key：
-
-| API key | 用途 |
-| --- | --- |
-| Volcano | Claude 和 Codex |
-| Bailian | Claude 和 Codex |
-| BlackAI GPT | Codex |
-| BlackAI Claude/Grok | Claude 和 Codex |
-
-- 已经保存过的 key：直接按 Enter 会保留原值。
-- 从未配置过的 key：直接按 Enter 会跳过该网关。
-- 需要替换 key：输入新 key 后按 Enter。
-
-安装过程可能需要访问 Node.js、npm 和相应模型网关。缺少 `libatomic.so.1` 时，
-脚本可能通过容器的 apt、dnf 或 yum 安装这个系统依赖。对于 `dnf`，如果镜像或
-代理返回的仓库元数据校验失败，脚本会清理缓存并强制刷新后重试，最后才临时禁用
-名称中包含 `update` 的仓库。如果该环境使用了不同的更新仓库名称，可以设置
-`AI_SETUP_DNF_DISABLE_REPO`（支持 dnf 的仓库 glob 或逗号分隔值）后重新运行，例如：
-
-```bash
-AI_SETUP_DNF_DISABLE_REPO='updates,update' bash ./set_claude_provider_keys.sh
-```
-
-Claude Code 和 Codex 的 npm 主包还需要与当前 CPU 和 libc 匹配的原生包。安装器会
-强制包含 npm optional dependencies；如果 npm 仍跳过当前平台包，安装器会从主包的
-`package.json` 读取精确版本并补装。只有 `claude --version` 和 `codex --version`
-都能正常执行后，脚本才会继续生成网关配置，避免留下显示安装成功但命令无法启动的环境。
-
-## 修改或上库前运行开发测试
-
-运行配套测试脚本：
-
-```bash
-bash ./test/set_claude_provider_keys_test.sh
-```
-
-测试使用隔离的临时目录，不会修改 `/agent`，不会访问真实模型网关，也不会消耗
-API token。它会检查安装编排、CCR 配置、Claude 配置，以及 Codex profile 和模型
-catalog 的生成与隔离，也会模拟平台原生包被 npm 跳过以及 CLI 无法启动的失败场景。
-当前环境能够找到 Codex 时，还会使用真实 Codex CLI 加载每个
-临时 profile。测试脚本退出状态为 0，且输出中没有 `not ok`，即表示测试通过。
-
-## 安装后验证 Codex
-
-完成安装和 token 配置后，在 `ai-coding-setup/linux_server` 目录运行：
-
-```bash
-bash ./test/set_claude_provider_keys_test.sh --installed-codex
-```
-
-该测试检查 `/agent/bin/codex`、`CODEX_HOME`、已配置 token 对应的 profile、独立模型
-catalog 以及模型 metadata 是否能被 Codex 正确加载。它只使用 Codex 的本地调试命令，
-不会向模型网关发送推理请求，也不会消耗 API token。至少需要配置一个网关 token；
-只执行过 `--install-only`、尚未生成 profile 时，该测试会提示先完成网关配置。
-
-## 安装完成后激活环境
-
-安装脚本会在当前用户的 `~/.bashrc` 中维护一个带标记的配置区块，让以后新打开的
-Bash 会话自动加载 `/agent/env.sh`。重复运行安装脚本不会重复追加配置。
-`/agent/env.sh` 本身也会在加载时先移除 PATH 中已有的 `/agent/bin` 和
-`/agent/node/bin`，再各添加一次，因此反复执行 `source` 或打开嵌套 Bash 不会让
-PATH 持续增长。
-
-安装脚本无法修改已经启动的 shell 进程，因此安装完成后仍需在当前 shell 执行一次：
-
-```bash
-source "/agent/env.sh"
+source /agent/env.sh
 hash -r
 ```
 
-确认当前使用的是本容器中的命令：
+确认命令来自本安装目录：
 
 ```bash
 command -v claude
@@ -166,34 +64,29 @@ command -v codex
 command -v ccr
 ```
 
-正常情况下，它们都应指向 `/agent/bin/`。以后新打开的 Bash 会话会通过 `~/.bashrc`
-自动加载环境，不需要再次手动执行 `source`。
+正常情况下均指向 `/agent/bin/`。
 
-## 使用 Claude Code
-
-启动 Claude Code：
+需要用 root 安装、但之后由普通用户运行时，请指定实际用户：
 
 ```bash
-claude
+sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh
 ```
 
-进入 Claude Code 后，通过 `/model` 查看 CCR 从已配置 token 发现的模型并进行选择。
-火山、百炼和 BlackAI Claude/Grok 的模型会按 provider 分组显示。
-
-查看 CCR 进程记录；如果系统支持 systemd，也可以查看服务状态：
+需要改用其他安装目录时，两个脚本都传入相同环境变量：
 
 ```bash
-jq '{url, pid}' /agent/home/.claude-code-router/service.json
-systemctl status ai-coding-setup-ccr.service
+AI_SETUP_AGENT_DIR="$HOME/agent" bash ./set_claude_provider_keys.sh
 ```
 
-## 使用 Codex
+## 基础网关使用
 
-Codex 会把已配置 token 对应的 provider 注册到全局配置，同时为每个 token 保留独立
-profile。普通 `codex` 默认通过 CCR 使用火山网关模型，并在 `/model` 中展示所有已启用、
-已验证网关的模型。模型统一使用 `网关名/模型名`，例如 `火山AI网关/glm-5.3` 和
-`京东网关/GPT-5.6-Sol-joybuilder`；用户选中哪个前缀，就会使用该网关对应的 token。
-支持完整 Codex 工具协议的网关也可以直接使用对应的 `--profile`：
+尚未安装 JD 时，普通启动使用火山默认模型：
+
+```bash
+codex
+```
+
+切换到某个独立网关：
 
 ```bash
 codex --profile volcano
@@ -202,388 +95,220 @@ codex --profile blackai-gpt
 codex --profile blackai-claude
 ```
 
-统一列表和同名模型的网关优先顺序为：火山、百炼、BlackAI GPT、BlackAI Claude、JD。
-由于列表中的名称带有网关前缀，即使多个网关都提供同一个原始模型名，也会显示为不同条目，
-不会错误共用 token。显式选择带前缀模型时会精确路由；只有手工传入不带网关前缀的同名模型
-时，CCR 才会按照上述 provider 顺序尝试。
+profile 的 `/model` 只显示该 token 实际发现或验证成功的模型，不会混入其他网关。
 
-火山网关的原生 Responses 接口不支持 Codex 的 `additional_tools`、`namespace` 等工具项，
-因此不要使用 `codex --profile volcano` 执行需要工具的会话。请通过 CCR 使用火山模型，
-CCR 会负责协议转换：
+恢复会话时，安装器生成的 `codex` 启动器会读取会话记录的 provider。没有显式指定 profile 时，会为直连网关会话自动恢复原 profile：
 
 ```bash
-codex -m '火山AI网关/deepseek-v4-pro'
+codex resume <SESSION_ID>
 ```
 
-没有配置 token 的 profile 不会生成。需要使用 CCR 转发的火山模型时，请显式指定
-`火山AI网关/deepseek-v4-pro`；恢复历史会话时，全局配置可以识别已配置的 provider；
-如果需要严格使用某个 token 的独立模型目录，仍应带上对应的 `--profile`。
+需要明确用另一网关继续时，可显式覆盖：
 
-## 只生成京东网关配置
+```bash
+codex resume <SESSION_ID> --profile jd
+codex resume <SESSION_ID> --profile bailian
+```
 
-`set_jd_gateway_config.sh` 是基础安装完成后的附加脚本。它不安装 Node.js、Claude Code、
-Codex 或 CCR，也不修改主安装器保存的火山、百炼和 BlackAI 配置。默认从 JD 网关的
-`/models` 接口自动发现 Claude 和 GPT 系列模型，再通过实际协议请求验证后写入配置；
-不会使用或混合其他网关的模型列表。
+显式 `--profile` 始终优先。跨网关恢复时，上游必须兼容该会话已有的消息和工具格式。
 
-### 一键追加到已有配置
+## 添加或更新 JD 网关
 
-直接运行脚本即可。脚本会隐藏输入 JD token，并把 JD 支持追加到已有安装：
+JD 脚本用于可访问 `llm-gw.jd.local` 的内网机器。先完成基础安装，再运行：
 
 ```bash
 bash ./set_jd_gateway_config.sh
+source /agent/env.sh
 ```
 
-`--merge` 与默认行为相同，可在自动化命令中显式使用。这个模式不会修改 Claude 的主
-`settings.json`，也不会改变 Codex 主配置中的默认 provider、默认模型和已有网关。它会向
-Codex 主配置追加一个不含 token 的 JD provider 注册，并把已验证的 JD 模型追加到 CCR 的
-统一模型列表，使普通 `codex` 的 `/model` 同时显示原有网关和 `京东网关/...` 模型。
-安装器生成的 `codex` 启动器会读取显式会话 ID 的元数据，并按原会话的
-provider 自动叠加 `volcano`、`bailian`、`blackai-gpt`、`blackai-claude` 或 `jd` profile，
-使 `/model` 显示对应网关的 catalog。命令中显式提供的 `--profile` 优先；在 `resume` 或
-`fork` 中指定这五个 profile 时，启动器会把它转换成 CCR 的带前缀模型路由。这样既能选择
-目标 token，也能由 CCR 把原会话历史转换为目标网关支持的协议。已保存过 token 时，交互
-运行可直接按 Enter 保留原值；非交互运行会优先使用当前环境中的值，否则复用
-`/agent/env.sh` 中保存的值。
+它会：
 
-- Codex 会生成独立 profile 文件：`$CODEX_HOME/jd.config.toml`。未设置 `CODEX_HOME`
-  时，本安装器环境写入 `/agent/config/codex/jd.config.toml`；普通环境写入
-  `~/.codex/jd.config.toml`。
-- 同时生成 JD 独立模型 catalog：`$CODEX_HOME/catalogs/jd.json`；模型列表只包含同时通过
-  Responses 和 Chat Completions 验证的 JD 模型，不会继承全局配置里的火山模型。普通
-  `codex --profile jd` 仍可直接访问 JD；跨网关 `resume/fork --profile jd` 会通过 CCR 的
-  Chat Completions 适配转换历史，避免 JD Responses 接口拒绝其他网关保存的消息数组。
-- `$CODEX_HOME/config.toml` 只增加带受管标记的 `[model_providers.jd]` 注册；不会改变原来的
-  `model_provider`、`model` 或其他 provider。CCR 中会追加或更新同一个 JD provider，并保留
-  已有 provider 和默认路由。这个注册使不带 `--profile jd` 的
-  `codex resume <JD会话ID>` 也能识别会话中保存的 JD provider。裸 `resume` 会自动加载
-  原会话对应的独立 profile；显式 `resume --profile <目标网关>` 则通过 CCR 切换到目标网关，
-  并继续使用统一的带前缀模型 catalog。
+1. 隐藏读取 JD token；已有 token 时直接回车可保留。
+2. 从 JD 的 Claude 和 Codex `/models` 端点发现模型。
+3. 将接口返回结果与内置候选合并，并逐个发送实际请求验证。
+4. 只把验证成功的模型写入 `/agent/config/codex/catalogs/jd.json` 和 `jd.config.toml`。
+5. 生成 `/agent/bin/claude-jd`。
+6. 把 `JD_GATEWAY_TOKEN` 追加到 `/agent/env.sh`，不改动已有网关变量。
+7. 把 JD provider 追加或更新到 CCR，同时保持 CCR 和普通 `claude` 默认路由到火山。
+8. 把普通 `codex` 的默认 provider 和模型目录切到 JD；已有火山、百炼和 BlackAI profile 继续保留。
 
-恢复会话时可以保留原网关，也可以显式切换网关：
+JD Codex 候选目前包括：
 
-```bash
-# 按会话原来的 provider 加载对应模型列表
-codex resume <会话ID>
-
-# 使用 JD 网关继续已有会话；两种写法等价
-codex resume <会话ID> --profile jd
-codex --profile jd resume <会话ID>
-
-# 也可切换到其他已生成的网关 profile
-codex resume <会话ID> --profile volcano
-codex resume <会话ID> --profile bailian
-codex resume <会话ID> --profile blackai-gpt
-codex resume <会话ID> --profile blackai-claude
+```text
+GPT-5.6-Terra-joybuilder
+GPT-5.6-Sol-joybuilder
+GPT-5.5-joybuilder
+GPT-5.6-Luna-joybuilder
+GPT-6-Astra-joybuilder
 ```
 
-普通启动时也可以直接从统一列表选 JD：
+候选不是最终可见列表。即使 `/models` 漏报某个候选，脚本也会主动调用验证；只有验证成功的模型才会写入配置。
+
+安装完成后，普通 `codex` 默认使用 JD；显式 profile 与 Claude 启动方式如下：
 
 ```bash
 codex
-# 进入后执行 /model，选择 京东网关/GPT-...
+codex --profile jd
+codex --profile volcano
+claude-jd
+claude
 ```
 
-通过统一列表启动的会话会记录 `claude-code-router` provider 和带网关前缀的模型名；裸
-`resume` 会继续通过 CCR 路由到原来的网关。通过独立 profile 启动的会话会记录对应的直接
-provider；启动器会在裸 `resume <会话ID>` 时自动恢复相应 profile。显式附加另一个网关的
-`--profile` 时，启动器会改用 CCR 和目标网关前缀，并保留原会话 ID 与历史。
+其中 `claude-jd` 直连 JD，普通 `claude` 仍通过 CCR 默认使用火山。
 
-- 安装器布局中，脚本把 `JD_GATEWAY_TOKEN` 直接追加到 `/agent/env.sh` 的受管区块，并把
-  文件权限设置为 `600`；不会另外生成 `jd.env`。主安装器以后重写 `/agent/env.sh` 时会
-  读取并保留这个值。当前已打开的 shell 需要执行一次：
-
-  ```bash
-  source /agent/env.sh
-  ```
-
-- 主安装器中的 `claude` 命令继续读取原来的 `settings.json` 并通过 CCR 使用火山、百炼和
-  BlackAI 网关。JD 脚本不会生成第二份 Claude settings 文件，而是在 `/agent/bin` 生成
-  `claude-jd` 启动器。启动器从 `/agent/env.sh` 读取 token，并只在自己的 Claude 进程中
-  叠加 JD 地址、模型和权限：
-
-  ```bash
-  claude-jd
-  ```
-
-  普通 Linux 环境会把 token 追加到 `~/.bashrc` 或 `~/.zshrc`，并生成
-  `~/.local/bin/claude-jd`。如果该目录不在 `PATH`，可使用完整路径：
-
-  ```bash
-  "$HOME/.local/bin/claude-jd"
-  ```
-
-- Codex 使用独立 JD profile：
-
-  ```bash
-  codex --profile jd
-  ```
-
-  JD profile 与火山 profile 使用相同的连续执行策略：`approval_policy = "never"`、
-  `sandbox_mode = "danger-full-access"`，新启动的 JD 会话不会请求命令审批。
-
-- `claude-jd` 使用 `bypassPermissions`；主安装器生成的 Claude CCR 配置也使用相同模式。
-  JD 路由只存在于 `claude-jd` 进程中，不会改变普通 `claude` 的网关。
-- 如果只需要 Codex JD profile，可以使用：
-
-  ```bash
-  bash ./set_jd_gateway_config.sh --codex-only
-  ```
-
-### 其他模式
+更新 JD token 时重新运行同一脚本即可：
 
 ```bash
-# 生成独立文件，不写入现有配置目录
-bash ./set_jd_gateway_config.sh --standalone --output-dir "$HOME/jd-config"
-
-# 只生成 Codex 独立配置
-bash ./set_jd_gateway_config.sh --standalone --codex-only
-
-# 只显示将要修改的文件，不写文件、不打印 token；仍会探测网关
-bash ./set_jd_gateway_config.sh --dry-run
-
-# 完全离线预览，不写文件、不打印 token，也不探测网关
-bash ./set_jd_gateway_config.sh --dry-run --no-probe
+bash ./set_jd_gateway_config.sh
+source /agent/env.sh
 ```
 
-`--standalone` 会在输出目录生成 `claude-settings.json` 和 `codex-config.toml`。
-`--merge` 和 `--standalone` 不能同时使用。默认追加模式不会修改 Claude 的
-`settings.json` 或 Codex 的默认路由，只更新 `/agent/env.sh` 的 JD 变量、在 Codex 主配置
-中注册不含 token 的 JD provider、在 CCR 中追加 JD provider，并维护 `jd.config.toml`、
-模型 catalog 和 `/agent/bin/claude-jd` 启动器。Codex 当前通过独立
-`<profile>.config.toml` 实现 `--profile`，因此 `jd.config.toml` 是必须保留的 profile 文件。
-
-### token 和权限
-
-默认使用 Codex 的 `env_key = "JD_GATEWAY_TOKEN"`，不会把 token 写入 `jd.config.toml`。
-默认追加模式会把 token 直接写入 `/agent/env.sh`，并将该文件权限设为 `600`；普通环境
-则写入 `~/.bashrc` 或 `~/.zshrc` 的受管区块。交互输入 token 后通常不需要再手动
-`export`。当前已打开的安装器 shell 需要执行一次 `source /agent/env.sh`。
-
-为了让普通 `codex` 的 CCR 统一模型列表能够实际转发 JD 请求，CCR 还会把 JD 上游凭据
-保存在自己的本地数据目录 `/agent/home/.claude-code-router/config.sqlite`。这是 CCR 的
-provider 凭据存储机制；目录和数据库应只允许安装用户访问。`jd.config.toml` 仍只保存
-`env_key`，不会出现明文 token。
-
-如果在 `--codex-only` 模式明确选择 `--inline-token`，token 会写入 TOML；Claude 同时启用时
-仍需要环境中的 JD token。选择 `--no-save-token` 时不修改 `/agent/env.sh` 或 shell 配置，
-同时也不会把 JD 注册进 CCR 的默认统一列表；此时需在当前 shell 设置 `JD_GATEWAY_TOKEN`
-并使用 `codex --profile jd`。包含 token 的 `/agent/env.sh` 和生成的配置文件权限都是 `600`。
-不要把 token 或生成文件内容粘贴到聊天、日志、工单或代码仓库中。
-
-### 模型自动发现和验证
-
-默认运行时，脚本会分别请求 JD 的 `/anthropic/v1/models` 和 `/v1/models`：
-
-- Claude 配置自动选择列表中的 `Claude-*` 模型。
-- Codex 配置自动选择列表中的 `GPT-*` 模型。
-- 自动发现的模型还会通过 `/anthropic/v1/messages` 或 `/v1/responses` 发送最小请求验证。
-- 只有列表匹配且实际调用返回成功的模型才会写入配置和 JD catalog。
-- 新增的 Claude 版本会自动生成对应的 `claude-opus-*` 或 `claude-sonnet-*` 别名。
-
-模型列表接口不可用或返回格式无法识别时，脚本会回退到以下内置候选并继续验证：
-
-| 端点 | 内置回退模型 |
-| --- | --- |
-| Claude | `Claude-Opus-4.8-joybuilder`、`Claude-Opus-4.7-joybuilder`、`Claude-Sonnet-5-joybuilder` |
-| Codex | `GPT-5.6-Terra-joybuilder`、`GPT-5.6-Sol-joybuilder` |
-
-可用模型以当前 JD token 的实际验证结果为准；验证失败的模型不会写入配置。某一端点的
-模型全部失败时，脚本会停止且不修改配置。网络不可达时可明确使用 `--no-probe`，此时既不
-读取模型列表也不验证调用，直接使用内置回退模型。`--dry-run` 默认也会执行自动发现和验证；
-与 `--no-probe` 一起使用才是完全离线预览。
-
-### JD 配置脚本测试
+自动化场景可以显式传入 token：
 
 ```bash
-bash ./test/set_jd_gateway_config_test.sh
+bash ./set_jd_gateway_config.sh --token "$JD_GATEWAY_TOKEN"
 ```
 
-测试会在临时目录模拟已有 Claude/Codex/CCR 配置，检查默认交互追加、主配置隔离、
-模型列表自动发现和协议验证、`claude-jd`、`jd.config.toml`、token 权限、重复运行和
-`--dry-run`。它不会访问 JD 网关，也不会修改 `/agent` 下的真实配置。
+JD profile 与基础网关使用相同的 Codex 权限策略：
 
-## 查看脚本发现的模型
-
-以下命令只读取模型名称，不会打印 API key：
-
-```bash
-jq -r '.models[].slug' "/agent/config/codex/catalogs/volcano.json"
-jq -r '.models[].slug' "/agent/config/codex/catalogs/bailian.json"
-jq -r '.models[].slug' "/agent/config/codex/catalogs/blackai-gpt.json"
-jq -r '.models[].slug' "/agent/config/codex/catalogs/blackai-claude.json"
-jq -r '.models[].slug' "/agent/config/codex/catalogs/jd.json"
+```toml
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
 ```
 
-自动发现并验证成功的 JD GPT 模型会写入 `jd.json`，可使用
-`codex --profile jd -m '<模型名称>'` 选择。未配置的 provider 不会有对应 catalog 文件。`/models` 返回模型名称，只说明网关向
-该 token 公布了模型；最终是否完全兼容 Claude/Codex，需要以实际调用结果为准。
+因此正常执行任务时不会弹出 Codex 命令审批。
 
-## 以后如何重新运行
+## 配置更新命令
 
-主安装器重跑时会恢复完整的五网关配置。火山、百炼、BlackAI GPT 和 BlackAI Claude
-从 `/agent/config/codex/gateways.env` 恢复 token，并重新探测各自可用模型；JD 从
-`/agent/env.sh` 恢复 token，并从已验证的 `catalogs/jd.json` 恢复模型。随后脚本把五种
-provider 一起写回 CCR，并检查 CCR 运行时 `/v1/models` 是否包含每个已配置网关的模型。
-`jd.config.toml`、`catalogs/jd.json` 和 `claude-jd` 不会被删除。因此普通 `claude` 和普通
-`codex` 继续使用 CCR 统一路由，`claude-jd` 和 `codex --profile jd` 仍可绕过 CCR 直接使用
-JD，两种入口互不覆盖。
-
-机器重启时，systemd 服务直接使用 CCR 持久化配置恢复以上 provider，不需要重新输入 token。
-如果需要主动重建所有网关、端口、Codex profile 和 CCR 配置，运行：
+只重新探测并更新基础网关，不重新安装 CLI：
 
 ```bash
 bash ./set_claude_provider_keys.sh --configure-only
-source "/agent/env.sh"
+source /agent/env.sh
 ```
 
-只更新 token、端口和模型配置，不重新安装工具：
-
-```bash
-bash ./set_claude_provider_keys.sh --configure-only
-```
-
-只安装或更新工具，不配置网关：
+只安装或更新 CLI，不修改网关配置：
 
 ```bash
 bash ./set_claude_provider_keys.sh --install-only
 ```
 
-`--install-only` 之后如需使用 Claude 网关，再运行一次 `--configure-only`。
-
-预览脚本将执行的操作，但不写文件：
+预览基础脚本，不写文件：
 
 ```bash
 bash ./set_claude_provider_keys.sh --configure-only --dry-run
 ```
 
-重新配置会更新 `/agent/env.sh` 和密钥文件；新开的 Bash 会话会自动读取。当前 shell
-如果需要立即使用新值，再执行：
+JD 常用可选参数：
+
+```text
+--token <token>       非交互提供 token
+--claude-only         只生成 Claude 配置
+--codex-only          只生成 Codex 配置
+--no-probe            跳过在线验证，使用内置候选
+--no-save-token       不持久化 token，也不把 token 写入 CCR
+--dry-run             仅显示计划
+--output-dir <dir>    输出到指定目录，适合隔离测试
+--standalone          生成独立配置文件
+```
+
+日常追加或更新 JD 时不需要额外参数。
+
+## CCR 自动恢复
+
+基础脚本会动态选择连续三个空闲端口，并写入：
+
+```text
+/agent/home/.claude-code-router/runtime.env
+```
+
+如果 PID 1 是 systemd，脚本会安装并启用 `ai-coding-setup-ccr.service`，机器重启后自动恢复 CCR。查看状态：
 
 ```bash
-source "/agent/env.sh"
-hash -r
+systemctl status ai-coding-setup-ccr.service
+```
+
+没有 systemd 的容器不会安装服务，需要由容器入口、Supervisor 或其他进程管理器执行：
+
+```bash
+/agent/bin/ccr-autostart
 ```
 
 ## 常见问题
 
-### 找不到 claude、codex 或 ccr
+### 找不到命令
 
 ```bash
-source "/agent/env.sh"
+source /agent/env.sh
 hash -r
+command -v codex
 ```
 
-然后使用 `command -v codex` 确认路径是否位于 `/agent/bin/`。
+### Claude Code 或 Codex 缺少 ARM64 原生包
 
-### 普通用户提示 `config.toml: Permission denied`
-
-这通常表示之前用 root 安装，导致 Codex 配置和 CCR HOME 仍为 `root:root`。使用实际登录
-用户重新执行一次上面的 `--configure-only` 命令；脚本会保留已保存的 key，并修复配置、
-SQLite 状态和缓存的所有权，不会把 key 打印到终端。
-
-### 端口已被占用
-
-脚本默认从 3456 开始扫描连续的三个空闲端口，但实际端口由当前环境动态选择并写入
-`/agent/home/.claude-code-router/runtime.env`；CCR 启动器和 systemd 服务都会读取这个
-运行时文件，不会把 3456 当成固定端口。重新运行 `--configure-only` 会重新选择端口。
-也可以通过 `AI_SETUP_CCR_PORT_SCAN_START` 指定扫描起点。完成后可用 systemd 和端口检查状态。
-
-### CCR 开机自动启动（WSL 和普通 Linux）
-
-如果系统 PID 1 是 systemd（WSL 需要在 `/etc/wsl.conf` 中启用 `systemd=true`），配置阶段
-会自动安装并启用 `ai-coding-setup-ccr.service`。服务启动时读取保存的动态端口，网络就绪
-后启动 CCR；没有 systemd 的 Linux 环境不会修改系统启动文件，只会提示手动启动：
+基础脚本会强制安装 npm optional dependencies，并根据主包 `package.json` 补装与 CPU、libc 匹配的原生包。重新运行完整安装：
 
 ```bash
-ccr start --host 127.0.0.1 --port "$(awk -F= '$1 == "CCR_MANAGEMENT_PORT" {print $2}' \
-  /agent/home/.claude-code-router/runtime.env)" --no-open --gateway
+bash ./set_claude_provider_keys.sh
 ```
 
-查看服务状态：
+脚本只有在 `claude --version` 和 `codex --version` 都成功后才进入配置阶段。
 
-```bash
-systemctl status ai-coding-setup-ccr.service
-ss -ltnp | grep -E '127\.0\.0\.1:[0-9]+'
-```
+### 普通 Codex 显示了其他网关或带中文前缀的旧模型
 
-如果 `systemctl is-system-running` 报错或 PID 1 不是 `systemd`，说明当前环境没有可用的
-systemd。此时不需要为了本脚本单独安装 npm 包；可以手动启动 CCR，或在已有的进程管理器
-（例如 Docker、Supervisor、runit）中托管 `/agent/bin/ccr-autostart`。
-
-### 统一列表有模型，但请求被转发到错误网关
-
-如果错误中出现类似以下内容：
-
-```text
-Model "京东网关/GPT-..." is not configured for target provider openai
-provider_name: volcano-ai-gateway
-```
-
-说明 Codex 模型 catalog 已有该模型，但 CCR 运行配置缺少对应 provider，二者状态不一致。
-更新代码后，在仓库的 `linux_server` 目录执行：
-
-```bash
-git pull
-source "/agent/env.sh"
-bash ./set_jd_gateway_config.sh --codex-only
-source "/agent/env.sh"
-```
-
-这会重新探测 JD 模型、把 JD provider 追加到现有 CCR，强制刷新 CCR 网关，并通过一次
-带 `京东网关/` 前缀的实际请求验证路由；火山、百炼和 BlackAI provider 会保留。若要完整
-重建并验证全部五个网关：
+未安装 JD 的机器重新运行基础配置后，普通 `codex` 应只显示火山模型：
 
 ```bash
 bash ./set_claude_provider_keys.sh --configure-only
-bash ./set_jd_gateway_config.sh --codex-only
-source "/agent/env.sh"
+source /agent/env.sh
 ```
 
-### 修改了 token，但模型列表没有更新
+已安装 JD 且 JD token、profile 和 catalog 都有效时，基础脚本重跑会保留普通 `codex` 默认使用 JD。需要刷新 JD 模型时重新运行 JD 脚本。其他网关继续使用对应 `--profile`。
 
-基础四网关 token 更新后运行：
+### JD 模型没有更新
+
+重新运行 JD 脚本。若 `/models` 没有返回某个已知候选，脚本仍会主动探测；只有实际调用成功才会加入 JD catalog。
 
 ```bash
-bash ./set_claude_provider_keys.sh --configure-only
-source "/agent/env.sh"
+bash ./set_jd_gateway_config.sh
+source /agent/env.sh
 ```
 
-JD token 更新后运行：
+### CCR 没有注册 JD
+
+确认基础安装已完成并且 CCR 能启动，再重新执行 JD 脚本：
 
 ```bash
-bash ./set_jd_gateway_config.sh --codex-only
-source "/agent/env.sh"
+source /agent/env.sh
+ccr status
+bash ./set_jd_gateway_config.sh
 ```
 
-## 目录和安全说明
+JD 脚本会更新 CCR 中的 JD provider，但不改变 CCR 的 `preferredProvider` 和 `defaultOpenAIModel`，所以普通 `claude` 仍默认走火山；普通 `codex` 会改用 JD catalog。
 
-主要目录：
-
-```text
-/agent/
-├── bin/       claude、codex、ccr 启动器
-├── node/      Node.js 和已安装的 CLI 工具
-├── config/    Claude、Codex、模型 catalog 和 API key 配置
-├── home/      CCR 的容器内 HOME 和服务配置
-├── cache/     npm 缓存
-└── env.sh     当前 shell 的环境加载文件
-```
-
-API key 保存在 `/agent/config/codex/gateways.env`，文件权限为 600。
-不要把该文件内容粘贴到聊天、日志、工单或代码仓库中。
-
-工具、配置和缓存位于 `/agent`。系统安装的 `libatomic` 等依赖不属于该目录。
-
-## 删除当前容器中的安装
-
-仅在确认 `/agent` 是当前容器由本脚本创建的专用目录后执行：
+## 开发验证
 
 ```bash
-source "/agent/env.sh"
+bash ./test/set_claude_provider_keys_test.sh
+bash ./test/set_jd_gateway_config_test.sh
+bash -n ./set_claude_provider_keys.sh
+bash -n ./set_jd_gateway_config.sh
+```
+
+已安装环境可额外检查：
+
+```bash
+bash ./test/set_claude_provider_keys_test.sh --installed-codex
+```
+
+## 安全和清理
+
+基础四网关 token 保存在 `/agent/config/codex/gateways.env`，JD token 保存在 `/agent/env.sh`；相关文件权限为 600。不要把 token 输出到日志或提交到仓库。
+
+确认 `/agent` 是本脚本创建的专用目录后，可删除当前容器中的安装：
+
+```bash
+source /agent/env.sh
 ccr stop || true
-rm -rf -- "/agent"
+rm -rf -- /agent
 ```
-
-删除后无法从该目录恢复 API key 和配置。该操作只应针对当前容器，不要替换成其他
-容器或宿主机的目录。

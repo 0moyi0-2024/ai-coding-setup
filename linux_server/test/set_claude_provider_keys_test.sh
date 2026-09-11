@@ -274,54 +274,70 @@ test_codex_profiles() {
   ! grep -Fq 'gpt-5.6-sol' <<<"${claude}" || fail "Claude profile excludes GPT models"
   grep -Fq "model_catalog_json = \"$(codex_model_catalog_file blackai-gpt)\"" <<<"${blackai}" ||
     fail "BlackAI profile model catalog path"
-  grep -Fq 'multi_agent = false' <<<"${volcano}" ||
-    fail "Volcano profile disables unsupported namespace tools"
-  grep -Fq 'web_search = "disabled"' <<<"${volcano}" ||
-    fail "Volcano profile disables unsupported web search tools"
-  grep -Fq 'multi_agent = false' <<<"${blackai}" ||
-    fail "BlackAI GPT profile disables unsupported namespace tools"
-  grep -Fq 'web_search = "disabled"' <<<"${blackai}" ||
-    fail "BlackAI GPT profile disables unsupported web search tools"
-  grep -Fq 'multi_agent = false' <<<"${claude}" ||
-    fail "BlackAI Claude profile disables unsupported namespace tools"
-  # 验证全局配置，并模拟已经由附加脚本安装的 JD profile。基础安装器重跑时必须
-  # 保留 provider 注册，否则之前的 JD 会话无法直接 codex resume。
+  grep -Fq 'approval_policy = "never"' <<<"${volcano}" ||
+    fail "Volcano profile approval policy"
+  grep -Fq 'sandbox_mode = "danger-full-access"' <<<"${volcano}" ||
+    fail "Volcano profile sandbox mode"
+
+  unset JD_GATEWAY_TOKEN
+  rm -f -- "${CODEX_DIR}/jd.config.toml" "${CODEX_MODEL_CATALOG_DIR}/jd.json"
+  write_codex_global_config 'local-ccr-key' 'deepseek-v4-flash'
+  global_config=$(<"${CODEX_DIR}/config.toml")
+  grep -Fq 'model = "deepseek-v4-flash"' <<<"${global_config}" ||
+    fail "Codex without JD does not default to the bare Volcano model"
+  grep -Fq 'model_provider = "claude-code-router"' <<<"${global_config}" ||
+    fail "Codex without JD does not default to the Volcano CCR provider"
+  grep -Fq "model_catalog_json = \"$(codex_model_catalog_file volcano)\"" <<<"${global_config}" ||
+    fail "Codex without JD does not use the Volcano catalog"
+  grep -Fq 'model_reasoning_effort = "high"' <<<"${global_config}" ||
+    fail "Codex without JD does not use the Volcano reasoning level"
+  ! grep -Fq '[model_providers.jd]' <<<"${global_config}" ||
+    fail "Codex without JD unexpectedly registered the JD provider"
+
   mkdir -p "${CODEX_MODEL_CATALOG_DIR}"
   cat >"${CODEX_DIR}/jd.config.toml" <<'TOML'
+model = "GPT-5.6-Sol-joybuilder"
 model_provider = "jd"
 [model_providers.jd]
 name = "JD LLM Gateway"
 TOML
   printf '%s\n' '{"models":[{"slug":"GPT-5.6-Sol-joybuilder"}]}' \
     >"${CODEX_MODEL_CATALOG_DIR}/jd.json"
-  write_codex_global_config
+  JD_GATEWAY_TOKEN='configured-jd-token'
+  export JD_GATEWAY_TOKEN
+  write_codex_global_config 'local-ccr-key' 'deepseek-v4-flash'
   global_config=$(<"${CODEX_DIR}/config.toml")
+  grep -Fq 'model = "GPT-5.6-Sol-joybuilder"' <<<"${global_config}" ||
+    fail "Codex with JD does not default to the JD profile model"
+  grep -Fq 'model_provider = "jd"' <<<"${global_config}" ||
+    fail "Codex with JD does not default to the JD provider"
+  grep -Fq "model_catalog_json = \"$(codex_model_catalog_file jd)\"" <<<"${global_config}" ||
+    fail "Codex with JD does not use the JD catalog"
+  grep -Fq 'model_reasoning_effort = "xhigh"' <<<"${global_config}" ||
+    fail "Codex with JD does not use a supported JD reasoning level"
+  grep -Fq 'plan_mode_reasoning_effort = "max"' <<<"${global_config}" ||
+    fail "Codex with JD does not use the JD plan-mode reasoning level"
+  grep -Fq 'experimental_bearer_token = "local-ccr-key"' <<<"${global_config}" ||
+    fail "Global Codex config is missing the CCR client key"
   grep -Fq 'approval_policy = "never"' <<<"${global_config}" ||
     fail "Global Codex config missing approval_policy"
   grep -Fq 'sandbox_mode = "danger-full-access"' <<<"${global_config}" ||
     fail "Global Codex config missing sandbox_mode"
   grep -Fq '[model_providers.volcano-ai-gateway]' <<<"${global_config}" ||
     fail "Global Codex config missing Volcano provider"
-  grep -Fq 'env_key = "VOLCANO_AI_GATEWAY_API_KEY"' <<<"${global_config}" ||
-    fail "Global Codex config missing Volcano token variable"
   grep -Fq '[model_providers.bailian]' <<<"${global_config}" ||
     fail "Global Codex config missing Bailian provider"
   grep -Fq '[model_providers.blackaicoding-gpt]' <<<"${global_config}" ||
     fail "Global Codex config missing BlackAI GPT provider"
-  grep -Fq 'env_key = "BLACKAICODING_GPT_API_KEY"' <<<"${global_config}" ||
-    fail "Global Codex config missing BlackAI GPT token variable"
   grep -Fq '[model_providers.blackaicoding-claude]' <<<"${global_config}" ||
     fail "Global Codex config missing BlackAI Claude provider"
-  grep -Fq '# BEGIN JD gateway provider' <<<"${global_config}" ||
-    fail "Global Codex config did not preserve the JD provider registration"
   grep -Fq '[model_providers.jd]' <<<"${global_config}" ||
-    fail "Global Codex config missing JD provider required by resume"
-  grep -Fq 'env_key = "JD_GATEWAY_TOKEN"' <<<"${global_config}" ||
-    fail "Global Codex config JD provider references the wrong token variable"
+    fail "Global Codex config did not preserve the JD provider registration"
   grep -Fq 'models = ["GPT-5.6-Sol-joybuilder"]' <<<"${global_config}" ||
     fail "Global Codex config did not preserve the JD catalog models"
   assert_file_mode 600 "${CODEX_DIR}/config.toml" "Global Codex config mode"
-  pass "Codex profile rendering"
+  unset JD_GATEWAY_TOKEN
+  pass "isolated Codex profiles with Volcano and JD defaults"
 }
 
 test_codex_model_catalog() {
@@ -485,7 +501,7 @@ test_claude_settings_builder() {
 
 test_ccr_config_builder() {
   local response config
-  response='{"ok":true,"value":{"APIKEY":"old-local","Providers":[{"id":"custom","name":"Custom","enabled":true},{"id":"volcano-ai-gateway","name":"火山AI网关","apiKey":"old-volcano"}],"profile":{"claudeCode":{},"profiles":[{"agent":"claude-code"},{"agent":"codex"}]}}}'
+  response='{"ok":true,"value":{"APIKEY":"old-local","Providers":[{"id":"custom","name":"Custom","enabled":true},{"id":"volcano-ai-gateway","name":"火山AI网关","apiKey":"old-volcano"},{"id":"jd","name":"京东网关","apiKey":"existing-jd","type":"openai_responses","models":["existing-jd-model"]}],"profile":{"claudeCode":{},"profiles":[{"agent":"claude-code"},{"agent":"codex"}]}}}'
   config=$(build_ccr_config \
     "${response}" \
     'new-local' \
@@ -502,23 +518,18 @@ test_ccr_config_builder() {
     'new-blackai-claude' \
     '["claude-sonnet-4-6","claude-fable-5"]' \
     'new-blackai-gpt' \
-    '["gpt-5.6-sol","gpt-5.6-terra"]' \
-    'new-jd-token' \
-    '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]')
+    '["gpt-5.6-sol","gpt-5.6-terra"]')
   assert_json "${config}" '.APIKEY == "new-local"' "set CCR local key"
   assert_json "${config}" '.gateway.port == 3456 and .gateway.corePort == 3457' "set CCR ports"
   assert_json "${config}" '[.Providers[] | select(.id == "custom")] | length == 1' "preserve custom provider"
-  assert_json "${config}" '[.Providers[] | select(.id == "volcano-ai-gateway" and .apiKey == "new-volcano")] | length == 1' "replace Volcano provider"
-  assert_json "${config}" '[.Providers[] | select(.id == "volcano-ai-gateway")][0].models == ["deepseek-v4-flash","deepseek-v4-pro"]' "use discovered Volcano models"
+  assert_json "${config}" '[.Providers[] | select(.id == "jd" and .apiKey == "existing-jd")] | length == 1' "preserve JD provider managed by the JD installer"
+  assert_json "${config}" '[.Providers[] | select(.id == "volcano-ai-gateway" and .apiKey == "new-volcano")][0].models == ["deepseek-v4-flash","deepseek-v4-pro"]' "replace Volcano provider"
   assert_json "${config}" '[.Providers[] | select(.id == "bailian")][0].models == ["qwen3.7-plus"]' "use discovered Bailian models"
   assert_json "${config}" '[.Providers[] | select(.id == "blackai-claude" and .apiKey == "new-blackai-claude")][0].models == ["claude-sonnet-4-6","claude-fable-5"]' "use discovered BlackAI Claude models"
-  assert_json "${config}" '[.Providers[] | select(.id == "blackai-gpt" and .apiKey == "new-blackai-gpt" and .type == "openai_responses")][0].models == ["gpt-5.6-sol","gpt-5.6-terra"]' "use discovered BlackAI GPT models in the unified CCR catalog"
-  assert_json "${config}" '[.Providers[] | select(.id == "jd" and .name == "京东网关" and .apiKey == "new-jd-token" and .type == "openai_chat_completions")][0].models == ["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]' "restore JD in the unified CCR catalog"
-  assert_json "${config}" '[.Providers[] | select(.id == "volcano-ai-gateway" or .id == "bailian" or .id == "blackai-gpt" or .id == "blackai-claude" or .id == "jd") | .id] == ["volcano-ai-gateway","bailian","blackai-gpt","blackai-claude","jd"]' "keep deterministic gateway priority"
-  assert_json "${config}" '.preferredProvider == "火山AI网关" and .defaultOpenAIModel == "deepseek-v4-flash"' "prefer Volcano for unqualified/default requests"
-  assert_json "${config}" '.profile.profiles[] | select(.agent == "codex") | .providerId == "claude-code-router" and .model == "火山AI网关/deepseek-v4-flash"' "set the default Codex route to Volcano through CCR"
+  assert_json "${config}" '[.Providers[] | select(.id == "blackai-gpt" and .apiKey == "new-blackai-gpt" and .type == "openai_responses")][0].models == ["gpt-5.6-sol","gpt-5.6-terra"]' "use discovered BlackAI GPT models"
+  assert_json "${config}" '.preferredProvider == "火山AI网关" and .defaultOpenAIModel == "deepseek-v4-flash"' "keep Volcano as the CCR default"
   assert_json "${config}" '.profile.profiles[] | select(.agent == "claude-code") | .opusModel == "火山AI网关/deepseek-v4-pro"' "update Claude profile"
-  pass "CCR configuration rendering"
+  pass "CCR configuration keeps the default route separate from Codex catalogs"
 }
 
 test_ccr_config_from_empty_state() {
@@ -549,30 +560,23 @@ test_ccr_config_from_empty_state() {
 
 test_ccr_config_idempotence() {
   local response first second
-  response='{"ok":true,"value":{"APIKEY":"old-local","Providers":[],"profile":{"profiles":[]}}}'
+  response='{"ok":true,"value":{"APIKEY":"old-local","Providers":[{"id":"jd","name":"京东网关","apiKey":"existing-jd","type":"openai_responses","models":["existing-jd-model"]}],"profile":{"profiles":[]}}}'
   first=$(build_ccr_config "${response}" 'local' 'volcano' 'bailian' \
     '127.0.0.1' '3456' '3457' 'http://127.0.0.1:3456' \
     '["deepseek-v4-pro"]' '[]' 'deepseek-v4-pro' 'deepseek-v4-pro' \
-    'blackai-old' '["claude-fable-5"]')
+    'blackai-old' '["claude-fable-5"]' 'blackai-gpt' '["gpt-5.6-sol"]')
   second=$(build_ccr_config \
     "$(jq -cn --argjson value "${first}" '{ok:true,value:$value}')" \
-    '' '' '' '127.0.0.1' '3456' '3457' 'http://127.0.0.1:3456' \
+    'local' 'volcano' 'bailian' '127.0.0.1' '3456' '3457' 'http://127.0.0.1:3456' \
     '["deepseek-v4-pro"]' '[]' 'deepseek-v4-pro' 'deepseek-v4-pro' \
-    '' '["claude-fable-5"]')
+    'blackai-old' '["claude-fable-5"]' 'blackai-gpt' '["gpt-5.6-sol"]')
   assert_json "${second}" '[.Providers[] | select(.id == "volcano-ai-gateway")] | length == 1' \
     "CCR rerun does not duplicate Volcano provider"
   assert_json "${second}" '[.Providers[] | select(.id == "blackai-claude")] | length == 1' \
     "CCR rerun does not duplicate BlackAI provider"
-  assert_json "${second}" '[.Providers[] | select(.id == "blackai-claude")][0].apiKey == "blackai-old"' \
-    "CCR rerun preserves BlackAI key"
-  local with_existing_jd
-  with_existing_jd=$(build_ccr_config \
-    '{"ok":true,"value":{"Providers":[{"id":"jd","name":"京东网关","apiKey":"existing-jd","type":"openai_responses","models":["existing-jd-model"]}],"profile":{"profiles":[]}}}' \
-    'local' '' '' '127.0.0.1' '3456' '3457' 'http://127.0.0.1:3456' \
-    '[]' '[]' '' '' '' '[]' '' '[]')
-  assert_json "${with_existing_jd}" '[.Providers[] | select(.id == "jd")][0]
+  assert_json "${second}" '[.Providers[] | select(.id == "jd")][0]
     | .apiKey == "existing-jd" and .models == ["existing-jd-model"]' \
-    "CCR rerun preserves JD when no persisted JD state is available"
+    "CCR rerun preserves JD provider"
   pass "CCR configuration idempotence"
 }
 
@@ -628,26 +632,18 @@ test_gateway_key_round_trip() {
   pass "gateway key persistence"
 }
 
-test_persisted_jd_gateway_recovery() {
+test_persisted_jd_token_recovery() {
   local loaded_token='persisted JD token'
-  mkdir -p "${CODEX_MODEL_CATALOG_DIR}"
   cat >"${AGENT_ENV_FILE}" <<EOF
 # BEGIN JD gateway token
 export JD_GATEWAY_TOKEN=$(printf '%q' "${loaded_token}")
 # END JD gateway token
 EOF
-  cat >"${CODEX_MODEL_CATALOG_DIR}/jd.json" <<'JSON'
-{"models":[{"slug":"GPT-5.6-Sol-joybuilder"},{"slug":"GPT-6-Astra-joybuilder"}]}
-JSON
   unset JD_GATEWAY_TOKEN
-  JD_MODELS='[]'
-  load_persisted_jd_gateway >/dev/null
+  load_persisted_jd_token >/dev/null
   assert_eq "${loaded_token}" "${JD_GATEWAY_TOKEN}" "restore JD token from agent environment"
-  assert_eq '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]' "${JD_MODELS}" \
-    "restore JD models from the verified catalog"
   unset JD_GATEWAY_TOKEN
-  JD_MODELS='[]'
-  pass "persisted JD gateway recovery"
+  pass "persisted JD token recovery"
 }
 
 test_service_pid_reader() {
@@ -708,7 +704,7 @@ test_codex_resume_uses_original_profile() {
   local blackai_gpt_session_id='55555555-5555-4555-8555-555555555555'
   local blackai_claude_session_id='66666666-6666-4666-8666-666666666666'
   local session_dir="${CODEX_DIR}/sessions/2026/09/11"
-  local output expected profile session_id provider model
+  local output expected profile session_id provider
   mkdir -p "${NODE_INSTALL_DIR}/bin" "${session_dir}"
   cat >"${NODE_INSTALL_DIR}/bin/codex" <<'FAKE_CODEX'
 #!/usr/bin/env bash
@@ -716,22 +712,18 @@ printf '%s\n' "$@"
 FAKE_CODEX
   chmod 700 "${NODE_INSTALL_DIR}/bin/codex"
 
-  while IFS=$'\t' read -r profile session_id provider model; do
-    printf 'model_provider = "%s"\nmodel = "%s"\n' \
-      "${provider}" "${model}" >"${CODEX_DIR}/${profile}.config.toml"
+  while IFS=$'\t' read -r profile session_id provider; do
+    printf 'model_provider = "%s"\n' "${provider}" >"${CODEX_DIR}/${profile}.config.toml"
     printf '%s\n' \
       "{\"type\":\"session_meta\",\"payload\":{\"model_provider\":\"${provider}\"}}" \
       >"${session_dir}/rollout-test-${session_id}.jsonl"
   done <<EOF
-jd	${jd_session_id}	jd	GPT-5.6-Sol-joybuilder
-volcano	${volcano_session_id}	volcano-ai-gateway	deepseek-v4-flash
-bailian	${bailian_session_id}	bailian	qwen-max
-blackai-gpt	${blackai_gpt_session_id}	blackaicoding-gpt	gpt-5.6-sol
-blackai-claude	${blackai_claude_session_id}	blackaicoding-claude	claude-sonnet-4-6
+jd	${jd_session_id}	jd
+volcano	${volcano_session_id}	volcano-ai-gateway
+bailian	${bailian_session_id}	bailian
+blackai-gpt	${blackai_gpt_session_id}	blackaicoding-gpt
+blackai-claude	${blackai_claude_session_id}	blackaicoding-claude
 EOF
-  printf '%s\n' 'model_provider = "claude-code-router"' \
-    >"${CODEX_DIR}/claude-code-router.config.toml"
-  printf '%s\n' '{"models":[]}' >"${CODEX_DIR}/ccr-model-catalog.json"
   printf '%s\n' \
     '{"type":"session_meta","payload":{"model_provider":"claude-code-router"}}' \
     >"${session_dir}/rollout-test-${ccr_session_id}.jsonl"
@@ -751,25 +743,14 @@ blackai-claude	${blackai_claude_session_id}	blackaicoding-claude
 EOF
 
   output=$("${AGENT_BIN_DIR}/codex" resume "${volcano_session_id}" --profile jd)
-  expected=$(printf '%s\n' \
-    -c 'model_provider="claude-code-router"' \
-    -m '京东网关/GPT-5.6-Sol-joybuilder' \
-    resume "${volcano_session_id}")
+  expected=$(printf '%s\n' resume "${volcano_session_id}" --profile jd)
   assert_eq "${expected}" "${output}" \
-    "explicit JD profile switches the resumed session through CCR"
-
-  output=$("${AGENT_BIN_DIR}/codex" --profile=volcano -m glm-5.3 resume "${jd_session_id}")
-  expected=$(printf '%s\n' \
-    -c 'model_provider="claude-code-router"' \
-    -m '火山AI网关/glm-5.3' \
-    resume "${jd_session_id}")
-  assert_eq "${expected}" "${output}" \
-    "explicit model and gateway switch are normalized through CCR"
+    "explicit JD profile overrides the original session provider"
 
   output=$("${AGENT_BIN_DIR}/codex" resume "${ccr_session_id}")
-  expected=$(printf '%s\n' resume "${ccr_session_id}")
+  expected=$(printf '%s\n' --profile volcano resume "${ccr_session_id}")
   assert_eq "${expected}" "${output}" \
-    "CCR resume keeps the base launcher behavior"
+    "CCR-backed Volcano resume restores the Volcano profile"
   pass "Codex resume selects all original gateway profiles and honors explicit overrides"
 }
 
@@ -837,31 +818,25 @@ test_operation_manual() {
   [[ -f "${MANUAL_PATH}" && -r "${MANUAL_PATH}" ]] || fail "readable operation manual"
   grep -Fq 'bash ./set_claude_provider_keys.sh' "${MANUAL_PATH}" ||
     fail "manual installer command"
+  grep -Fq 'bash ./set_jd_gateway_config.sh' "${MANUAL_PATH}" ||
+    fail "manual JD installer command"
   grep -Fq 'bash ./test/set_claude_provider_keys_test.sh' "${MANUAL_PATH}" ||
     fail "manual test command"
-  grep -Fq 'bash ./test/set_claude_provider_keys_test.sh --installed-codex' "${MANUAL_PATH}" ||
-    fail "manual installed Codex test command"
-  grep -Fq '用于安装完成后检查当前容器中的真实 Codex 配置' "${MANUAL_PATH}" ||
-    fail "manual source layout"
-  ! grep -Fq '/mnt/sfs_turbo/tongpan' "${MANUAL_PATH}" ||
-    fail "manual contains a machine-specific source path"
-  ! grep -Eq '1\.\.[0-9]+' "${MANUAL_PATH}" ||
-    fail "manual contains a fixed test count"
-  grep -Fq '缺少时安装 Node.js，并安装或更新 Claude Code、Codex 和 CCR' "${MANUAL_PATH}" ||
-    fail "manual Node.js installation behavior"
-  grep -Fq 'source "/agent/env.sh"' "${MANUAL_PATH}" || fail "manual environment command"
-  grep -Fq '直接按 Enter 会保留原值' "${MANUAL_PATH}" || fail "manual existing key behavior"
-  grep -Fq -- '--configure-only' "${MANUAL_PATH}" || fail "manual configure-only usage"
-  grep -Fq -- '--install-only' "${MANUAL_PATH}" || fail "manual install-only usage"
-  grep -Fq -- '--dry-run' "${MANUAL_PATH}" || fail "manual dry-run usage"
+  grep -Fq 'source /agent/env.sh' "${MANUAL_PATH}" || fail "manual environment command"
   grep -Fq 'codex --profile volcano' "${MANUAL_PATH}" || fail "manual Volcano profile"
   grep -Fq 'codex --profile bailian' "${MANUAL_PATH}" || fail "manual Bailian profile"
   grep -Fq 'codex --profile blackai-gpt' "${MANUAL_PATH}" || fail "manual BlackAI GPT profile"
   grep -Fq 'codex --profile blackai-claude' "${MANUAL_PATH}" || fail "manual BlackAI Claude profile"
-  grep -Fq '通过 `/model` 查看' "${MANUAL_PATH}" || fail "manual Claude model discovery"
+  grep -Fq 'codex --profile jd' "${MANUAL_PATH}" || fail "manual JD profile"
+  grep -Fq '普通 `codex` 应只显示火山模型' "${MANUAL_PATH}" ||
+    fail "manual default Volcano catalog behavior"
+  grep -Fq 'JD provider 追加或更新到 CCR' "${MANUAL_PATH}" ||
+    fail "manual JD CCR registration behavior"
   grep -Fq 'gateways.env' "${MANUAL_PATH}" || fail "manual key security warning"
-  grep -Fq 'rm -rf -- "/agent"' "${MANUAL_PATH}" || fail "manual cleanup path"
-  ! grep -Fq '安装后生成的操作手册' "${MANUAL_PATH}" || fail "manual claims generated copy"
+  ! grep -Fq '/mnt/sfs_turbo/tongpan' "${MANUAL_PATH}" ||
+    fail "manual contains a machine-specific source path"
+  ! grep -Eq '1\.[.][0-9]+' "${MANUAL_PATH}" ||
+    fail "manual contains a fixed test count"
   pass "operation manual instructions"
 }
 
@@ -1185,32 +1160,28 @@ FAKE_SQLITE_NPM
   pass "better-sqlite3 recovery"
 }
 
-test_ccr_provider_catalog_validation() {
-  local response runtime_config
-  response='{"data":[{"id":"火山AI网关/deepseek-v4-pro"},{"id":"蓝区百炼/qwen-max"},"BlackAI GPT/gpt-5.6-sol",{"id":"BlackAI Claude/claude-sonnet-4-6"},{"id":"京东网关/GPT-5.6-Sol-joybuilder"}]}'
-  runtime_config='{"value":{"Providers":[{"id":"volcano-ai-gateway","name":"火山AI网关","type":"openai_chat_completions","models":["deepseek-v4-pro"]},{"id":"bailian","name":"蓝区百炼","type":"openai_chat_completions","models":["qwen-max"]},{"id":"blackai-gpt","name":"BlackAI GPT","type":"openai_responses","models":["gpt-5.6-sol"]},{"id":"blackai-claude","name":"BlackAI Claude","type":"openai_chat_completions","models":["claude-sonnet-4-6"]},{"id":"jd","name":"京东网关","type":"openai_chat_completions","models":["GPT-5.6-Sol-joybuilder"]}]}}'
-  ccr_models_include_provider_catalog "${response}" '火山AI网关' '["deepseek-v4-pro"]' ||
-    fail "CCR runtime validation rejected Volcano models"
-  ccr_models_include_provider_catalog "${response}" '蓝区百炼' '["qwen-max"]' ||
-    fail "CCR runtime validation rejected Bailian models"
-  ccr_models_include_provider_catalog "${response}" 'BlackAI GPT' '["gpt-5.6-sol"]' ||
-    fail "CCR runtime validation rejected BlackAI GPT models"
-  ccr_models_include_provider_catalog "${response}" 'BlackAI Claude' '["claude-sonnet-4-6"]' ||
-    fail "CCR runtime validation rejected BlackAI Claude models"
-  ccr_models_include_provider_catalog "${response}" '京东网关' '["GPT-5.6-Sol-joybuilder"]' ||
-    fail "CCR runtime validation rejected JD models"
-  ccr_config_includes_provider_catalog "${runtime_config}" 'volcano-ai-gateway'     '火山AI网关' 'openai_chat_completions' '["deepseek-v4-pro"]' ||
-    fail "CCR provider validation rejected the canonical Volcano provider"
-  ccr_config_includes_provider_catalog "${runtime_config}" 'jd'     '京东网关' 'openai_chat_completions' '["GPT-5.6-Sol-joybuilder"]' ||
-    fail "CCR provider validation rejected the canonical JD provider"
-  if ccr_config_includes_provider_catalog "${runtime_config}" 'jd'       'JD LLM Gateway' 'openai_chat_completions' '["GPT-5.6-Sol-joybuilder"]'; then
-    fail "CCR provider validation accepted a display-name/catalog mismatch"
-  fi
-  if ccr_models_include_provider_catalog "${response}" '京东网关' \
-      '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]'; then
-    fail "CCR runtime validation accepted a missing JD model"
-  fi
-  pass "CCR runtime catalog validation covers all five gateways"
+test_ccr_default_route_uses_bare_model() {
+  local payload_file="${TEST_ROOT}/ccr-route-payload.json"
+  export CCR_ROUTE_PAYLOAD_FILE="${payload_file}"
+  curl() {
+    local output='' payload=''
+    while (($#)); do
+      case "$1" in
+        --output) output=$2; shift 2 ;;
+        --data-binary) payload=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    printf '%s' "${payload}" >"${CCR_ROUTE_PAYLOAD_FILE}"
+    printf '%s' '{"id":"response"}' >"${output}"
+    printf '200'
+  }
+  probe_ccr_default_model 'http://127.0.0.1:3456' 'local-key' 'deepseek-v4-flash' >/dev/null
+  unset -f curl
+  unset CCR_ROUTE_PAYLOAD_FILE
+  assert_json "$(<"${payload_file}")" '.model == "deepseek-v4-flash"' \
+    "CCR default route uses a bare Volcano model name"
+  pass "CCR default route avoids provider-name prefixes"
 }
 
 test_ccr_connection_helpers() {
@@ -1277,7 +1248,7 @@ test_ccr_config_idempotence
 test_stale_profile_cleanup
 test_secure_file_permissions
 test_gateway_key_round_trip
-test_persisted_jd_gateway_recovery
+test_persisted_jd_token_recovery
 test_service_pid_reader
 test_rolling_port_selection
 test_agent_file_collision
@@ -1289,7 +1260,7 @@ test_dnf_metadata_recovery
 test_cli_install_command
 test_cli_version_validation
 test_better_sqlite_rebuild
-test_ccr_provider_catalog_validation
+test_ccr_default_route_uses_bare_model
 test_ccr_connection_helpers
 test_ccr_rpc_error
 test_completion_hint
