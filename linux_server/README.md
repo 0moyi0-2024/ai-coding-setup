@@ -213,8 +213,9 @@ codex -m '火山AI网关/deepseek-v4-pro'
 ## 只生成京东网关配置
 
 `set_jd_gateway_config.sh` 是基础安装完成后的附加脚本。它不安装 Node.js、Claude Code、
-Codex 或 CCR，也不修改主安装器保存的火山、百炼和 BlackAI 配置。默认只探测 JD 网关
-下方列出的候选模型，不会使用或混合其他网关的模型列表。
+Codex 或 CCR，也不修改主安装器保存的火山、百炼和 BlackAI 配置。默认从 JD 网关的
+`/models` 接口自动发现 Claude 和 GPT 系列模型，再通过实际协议请求验证后写入配置；
+不会使用或混合其他网关的模型列表。
 
 ### 一键追加到已有配置
 
@@ -315,18 +316,27 @@ Claude 同时启用时仍需要环境中的 JD token。选择 `--no-save-token` 
 token，也不修改 `/agent/env.sh` 或 shell 配置。包含 token 的 `/agent/env.sh` 和生成的
 配置文件权限都是 `600`。不要把 token 或生成文件内容粘贴到聊天、日志、工单或代码仓库中。
 
-### 模型探测
+### 模型自动发现和验证
 
-脚本只探测以下 JD 候选模型：
+默认运行时，脚本会分别请求 JD 的 `/anthropic/v1/models` 和 `/v1/models`：
 
-| 端点 | 候选模型 |
+- Claude 配置自动选择列表中的 `Claude-*` 模型。
+- Codex 配置自动选择列表中的 `GPT-*` 模型。
+- 自动发现的模型还会通过 `/anthropic/v1/messages` 或 `/v1/responses` 发送最小请求验证。
+- 只有列表匹配且实际调用返回成功的模型才会写入配置和 JD catalog。
+- 新增的 Claude 版本会自动生成对应的 `claude-opus-*` 或 `claude-sonnet-*` 别名。
+
+模型列表接口不可用或返回格式无法识别时，脚本会回退到以下内置候选并继续验证：
+
+| 端点 | 内置回退模型 |
 | --- | --- |
 | Claude | `Claude-Opus-4.8-joybuilder`、`Claude-Opus-4.7-joybuilder`、`Claude-Sonnet-5-joybuilder` |
 | Codex | `GPT-5.6-Terra-joybuilder`、`GPT-5.6-Sol-joybuilder` |
 
-可用模型以当前 JD token 实际探测结果为准；探测失败的模型不会写入配置。全部失败时，
-脚本会停止且不修改配置。网络不可达时可明确使用 `--no-probe` 跳过验证，但之后需要自行
-确认模型确实可用。`--dry-run` 默认也会探测网关；与 `--no-probe` 一起使用才是完全离线预览。
+可用模型以当前 JD token 的实际验证结果为准；验证失败的模型不会写入配置。某一端点的
+模型全部失败时，脚本会停止且不修改配置。网络不可达时可明确使用 `--no-probe`，此时既不
+读取模型列表也不验证调用，直接使用内置回退模型。`--dry-run` 默认也会执行自动发现和验证；
+与 `--no-probe` 一起使用才是完全离线预览。
 
 ### JD 配置脚本测试
 
@@ -335,8 +345,8 @@ bash ./test/set_jd_gateway_config_test.sh
 ```
 
 测试会在临时目录模拟已有 Claude/Codex/CCR 配置，检查默认交互追加、主配置隔离、
-`claude-jd`、`jd.config.toml`、token 权限、重复运行和 `--dry-run`。它不会访问 JD 网关，也不会修改
-`/agent` 下的真实配置。
+模型列表自动发现和协议验证、`claude-jd`、`jd.config.toml`、token 权限、重复运行和
+`--dry-run`。它不会访问 JD 网关，也不会修改 `/agent` 下的真实配置。
 
 ## 查看脚本发现的模型
 
@@ -347,9 +357,11 @@ jq -r '.models[].slug' "/agent/config/codex/catalogs/volcano.json"
 jq -r '.models[].slug' "/agent/config/codex/catalogs/bailian.json"
 jq -r '.models[].slug' "/agent/config/codex/catalogs/blackai-gpt.json"
 jq -r '.models[].slug' "/agent/config/codex/catalogs/blackai-claude.json"
+jq -r '.models[].slug' "/agent/config/codex/catalogs/jd.json"
 ```
 
-未配置的 provider 不会有对应 catalog 文件。`/models` 返回模型名称，只说明网关向
+自动发现并验证成功的 JD GPT 模型会写入 `jd.json`，可使用
+`codex --profile jd -m '<模型名称>'` 选择。未配置的 provider 不会有对应 catalog 文件。`/models` 返回模型名称，只说明网关向
 该 token 公布了模型；最终是否完全兼容 Claude/Codex，需要以实际调用结果为准。
 
 ## 以后如何重新运行

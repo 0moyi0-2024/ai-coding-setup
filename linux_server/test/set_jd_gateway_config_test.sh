@@ -373,6 +373,99 @@ FAKE_CURL
   pass 'partial probe results only configure verified models'
 }
 
+test_dynamic_model_discovery() {
+  local output_root="${TEST_ROOT}/dynamic-models"
+  local fake_bin="${TEST_ROOT}/dynamic-bin"
+  local output launcher_output runtime_settings
+  make_fake_codex "${fake_bin}"
+  cat >"${fake_bin}/curl" <<'FAKE_CURL'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+output=''
+payload=''
+url=''
+while (($#)); do
+  case "$1" in
+    --output)
+      output=$2
+      shift 2
+      ;;
+    --data-binary)
+      payload=$2
+      shift 2
+      ;;
+    http://*|https://*)
+      url=$1
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [[ "${url}" == */models ]]; then
+  cat >"${output}" <<'JSON'
+{
+  "object": "list",
+  "data": [
+    {"id": "Claude-Opus-4.9-joybuilder"},
+    {"id": "Claude-Sonnet-5.1-joybuilder"},
+    {"id": "GPT-6-Astra-joybuilder"},
+    {"id": "DeepSeek-V4-Pro-joybuilder"},
+    {"id": "GPT-invalid model name"}
+  ]
+}
+JSON
+  printf '200'
+  exit 0
+fi
+case "${payload}" in
+  *Claude-Opus-4.9-joybuilder*|*Claude-Sonnet-5.1-joybuilder*|*GPT-6-Astra-joybuilder*)
+    printf '200'
+    ;;
+  *)
+    printf '404'
+    ;;
+esac
+FAKE_CURL
+  chmod 700 "${fake_bin}/curl"
+
+  output=$(printf '%s\n' "${TEST_TOKEN}" | env -u JD_GATEWAY_TOKEN -u CLAUDE_CONFIG_DIR -u CODEX_HOME \
+    PATH="${fake_bin}:/usr/bin:/bin" HOME="${TEST_ROOT}/dynamic-home" \
+    bash "${SCRIPT_PATH}" --output-dir "${output_root}" 2>&1)
+
+  [[ "${output}" == *'Claude 模型列表发现 2 个匹配模型'* ]] ||
+    fail 'Claude model discovery did not report the dynamically listed models'
+  [[ "${output}" == *'Codex 模型列表发现 1 个匹配模型'* ]] ||
+    fail 'Codex model discovery did not report the dynamically listed model'
+  launcher_output=$(JD_GATEWAY_TOKEN="${TEST_TOKEN}" "${output_root}/claude-jd")
+  runtime_settings=$(sed -n '2p' <<<"${launcher_output}")
+  jq -e '
+    .env.ANTHROPIC_DEFAULT_OPUS_MODEL == "Claude-Opus-4.9-joybuilder"
+    and .env.ANTHROPIC_DEFAULT_SONNET_MODEL == "Claude-Sonnet-5.1-joybuilder"
+    and .modelOverrides["claude-opus-4-9"] == "Claude-Opus-4.9-joybuilder"
+    and .modelOverrides["claude-sonnet-5-1"] == "Claude-Sonnet-5.1-joybuilder"
+  ' <<<"${runtime_settings}" >/dev/null ||
+    fail 'dynamically discovered Claude models were not configured'
+  grep -Fq 'model = "GPT-6-Astra-joybuilder"' \
+    "${output_root}/.codex/jd.config.toml" ||
+    fail 'dynamically discovered Codex model was not selected'
+  grep -Fq 'models = ["GPT-6-Astra-joybuilder"]' \
+    "${output_root}/.codex/jd.config.toml" ||
+    fail 'Codex profile retained unavailable or unrelated discovered models'
+  jq -e '
+    .models | length == 1
+    and .[0].slug == "GPT-6-Astra-joybuilder"
+    and .[0].use_responses_lite == false
+  ' "${output_root}/.codex/catalogs/jd.json" >/dev/null ||
+    fail 'Codex catalog does not contain the validated dynamically discovered model'
+  ! grep -R -Fq 'DeepSeek-V4-Pro-joybuilder' "${output_root}" ||
+    fail 'model discovery mixed an unrelated family into JD profiles'
+  ! grep -R -Fq 'GPT-invalid model name' "${output_root}" ||
+    fail 'model discovery accepted an unsafe model identifier'
+  pass 'model list discovery adds new Claude and Codex models after protocol validation'
+}
+
 test_catalog_failure_is_atomic() {
   local output_root="${TEST_ROOT}/catalog-failure"
   local fake_bin="${TEST_ROOT}/catalog-bin"
@@ -440,6 +533,7 @@ test_dry_run
 test_agent_dir_discovery
 test_probe_failure_is_non_destructive
 test_partial_model_availability
+test_dynamic_model_discovery
 test_catalog_failure_is_atomic
 test_inline_token_toml_escaping
 test_mode_validation

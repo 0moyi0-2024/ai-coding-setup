@@ -20,7 +20,7 @@ umask 077
 #   --merge               追加 JD 支持（默认；保留 Claude/Codex 主配置默认行为）
 #   --claude-only         只生成 Claude Code 配置
 #   --codex-only          只生成 Codex 配置
-#   --no-probe            跳过模型探测，直接使用全部候选模型
+#   --no-probe            不访问网关，直接使用内置回退模型
 #   --inline-token        Codex 配置使用 http_headers 内联 token（默认使用 env_key 环境变量引用，更安全）
 #   --no-save-token       不把 token 追加到 /agent/env.sh 或用户 shell 配置
 #   --dry-run             探测模型并显示写入计划，不实际写文件或打印 token
@@ -32,7 +32,8 @@ readonly AGENT_DIR="${AI_SETUP_AGENT_DIR:-/agent}"
 CLAUDE_BASE_URL='http://llm-gw.jd.local/anthropic'
 CODEX_BASE_URL='http://llm-gw.jd.local/v1'
 
-# JD 网关支持的候选模型（按端点拆分）
+# JD 网关模型列表接口不可用时使用的回退候选（按端点拆分）。
+# 默认流程会先从 /models 自动发现同系列模型，再逐个调用实际协议验证。
 CLAUDE_MODEL_CANDIDATES=(
   'Claude-Opus-4.8-joybuilder'
   'Claude-Opus-4.7-joybuilder'
@@ -86,7 +87,7 @@ usage() {
                         生成 claude-jd 启动器；Codex 主配置只注册 JD provider
   --claude-only         只生成 Claude Code 配置
   --codex-only          只生成 Codex 配置
-  --no-probe            跳过模型探测，直接使用全部候选模型
+  --no-probe            不访问网关，直接使用内置回退模型
   --inline-token        Codex 配置使用 http_headers 内联 token（默认 env_key 引用环境变量，更安全）
   --no-save-token       不把 token 追加到 /agent/env.sh 或用户 shell 配置
   --dry-run             探测模型并显示写入计划，不实际写文件或打印 token
@@ -300,11 +301,66 @@ codex_main_config_path() {
   fi
 }
 
+discover_gateway_models() {
+  local label=$1 models_url=$2 family_pattern=$3
+  local response_file status model_count
+
+  response_file=$(mktemp "${TMPDIR:-/tmp}/jd-model-discovery.XXXXXXXX.json")
+
+  log "从 ${models_url} 自动发现 ${label} 模型 ..."
+  status=$(curl --silent --show-error --max-time 30 --output "${response_file}" \
+    --write-out '%{http_code}' \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H 'anthropic-version: 2023-06-01' \
+    -H 'content-type: application/json' \
+    "${models_url}" 2>/dev/null || true)
+  if [[ ! "${status}" =~ ^2 ]]; then
+    warn "${label} 模型列表获取失败（HTTP ${status:-请求失败}）；使用内置回退候选"
+    rm -f -- "${response_file}"
+    return 0
+  fi
+  if ! jq -e '(.data // .models) | type == "array"' "${response_file}" >/dev/null 2>&1; then
+    warn "${label} 模型列表格式无法识别；使用内置回退候选"
+    rm -f -- "${response_file}"
+    return 0
+  fi
+
+  model_count=$(jq -r --arg pattern "${family_pattern}" '
+      [(.data // .models // [])[]?
+       | if type == "string" then . else (.id // .name // .model // empty) end
+       | select(type == "string")
+       | select(test("^[A-Za-z0-9][A-Za-z0-9._:+/-]*$"))
+       | select(test($pattern; "i"))]
+      | unique
+      | length
+    ' "${response_file}")
+  if (( model_count == 0 )); then
+    warn "${label} 模型列表没有匹配 ${family_pattern} 的模型；使用内置回退候选"
+    rm -f -- "${response_file}"
+    return 0
+  fi
+  log "${label} 模型列表发现 ${model_count} 个匹配模型；继续验证实际调用能力"
+  jq -r --arg pattern "${family_pattern}" '
+      [(.data // .models // [])[]?
+       | if type == "string" then . else (.id // .name // .model // empty) end
+       | select(type == "string")
+       | select(test("^[A-Za-z0-9][A-Za-z0-9._:+/-]*$"))
+       | select(test($pattern; "i"))]
+      | unique[]
+    ' "${response_file}"
+  rm -f -- "${response_file}"
+}
+
+merge_model_candidates() {
+  awk 'NF && !seen[$0]++'
+}
+
 probe_claude_models() {
+  local -a candidates=("$@")
   local verified=()
   local model status payload
   log "探测 Claude 端点 ${CLAUDE_BASE_URL} ..."
-  for model in "${CLAUDE_MODEL_CANDIDATES[@]}"; do
+  for model in "${candidates[@]}"; do
     payload=$(jq -cn --arg m "${model}" \
       '{model:$m,max_tokens:16,messages:[{role:"user",content:"Reply OK."}]}')
     status=$(curl --silent --show-error --max-time 30 --output /dev/null \
@@ -329,10 +385,11 @@ probe_claude_models() {
 }
 
 probe_codex_models() {
+  local -a candidates=("$@")
   local verified=()
   local model status payload
   log "探测 Codex 端点 ${CODEX_BASE_URL} ..."
-  for model in "${CODEX_MODEL_CANDIDATES[@]}"; do
+  for model in "${candidates[@]}"; do
     payload=$(jq -cn --arg m "${model}" \
       '{model:$m,input:"Reply OK.",max_output_tokens:16,stream:false}')
     status=$(curl --silent --show-error --max-time 30 --output /dev/null \
@@ -366,11 +423,9 @@ build_claude_settings() {
       *sonnet*) [[ -z "${sonnet}" ]] && sonnet="${model}" ;;
     esac
     alias=''
-    case "${model}" in
-      Claude-Opus-4.8-joybuilder) alias='claude-opus-4-8' ;;
-      Claude-Opus-4.7-joybuilder) alias='claude-opus-4-7' ;;
-      Claude-Sonnet-5-joybuilder) alias='claude-sonnet-5' ;;
-    esac
+    if [[ "${normalized_model}" =~ ^claude-(opus|sonnet)-([0-9]+([.][0-9]+)?)-joybuilder$ ]]; then
+      alias="claude-${BASH_REMATCH[1]}-${BASH_REMATCH[2]//./-}"
+    fi
     if [[ -n "${alias}" ]]; then
       model_overrides=$(jq -c --arg alias "${alias}" --arg target "${model}" \
         '. + {($alias):$target}' <<<"${model_overrides}")
@@ -840,21 +895,35 @@ main() {
   ((CLAUDE_ONLY)) || require_command codex
   prompt_token
 
-  local -a claude_models codex_models
+  local -a claude_models codex_models claude_candidates codex_candidates discovered_models
   local probe_output
   if (( ! NO_PROBE )); then
     if (( ! CODEX_ONLY )); then
-      probe_output=$(probe_claude_models) ||
+      mapfile -t discovered_models < <(
+        discover_gateway_models 'Claude' "${CLAUDE_BASE_URL%/}/v1/models" '^Claude-'
+      )
+      mapfile -t claude_candidates < <(
+        printf '%s\n' "${CLAUDE_MODEL_CANDIDATES[@]}" "${discovered_models[@]}" |
+          merge_model_candidates
+      )
+      probe_output=$(probe_claude_models "${claude_candidates[@]}") ||
         die '没有探测到可用的 JD Claude 模型；配置保持不变'
       mapfile -t claude_models <<<"${probe_output}"
     fi
     if (( ! CLAUDE_ONLY )); then
-      probe_output=$(probe_codex_models) ||
+      mapfile -t discovered_models < <(
+        discover_gateway_models 'Codex' "${CODEX_BASE_URL%/}/models" '^GPT-'
+      )
+      mapfile -t codex_candidates < <(
+        printf '%s\n' "${CODEX_MODEL_CANDIDATES[@]}" "${discovered_models[@]}" |
+          merge_model_candidates
+      )
+      probe_output=$(probe_codex_models "${codex_candidates[@]}") ||
         die '没有探测到可用的 JD Codex 模型；配置保持不变'
       mapfile -t codex_models <<<"${probe_output}"
     fi
   else
-    log '跳过模型探测（--no-probe），使用全部候选模型'
+    log '跳过模型自动发现和调用验证（--no-probe），使用内置回退模型'
     claude_models=("${CLAUDE_MODEL_CANDIDATES[@]}")
     codex_models=("${CODEX_MODEL_CANDIDATES[@]}")
   fi
