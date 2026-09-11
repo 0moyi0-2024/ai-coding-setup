@@ -397,12 +397,22 @@ test_partial_model_availability() {
   make_fake_codex "${fake_bin}"
   cat >"${fake_bin}/curl" <<'FAKE_CURL'
 #!/usr/bin/env bash
-for argument in "$@"; do
-  case "${argument}" in
-    *Claude-Sonnet-5-joybuilder*|*GPT-5.6-Terra-joybuilder*) printf '200'; exit 0 ;;
+payload=''
+url=''
+while (($#)); do
+  case "$1" in
+    --data-binary) payload=$2; shift 2 ;;
+    http://*|https://*) url=$1; shift ;;
+    *) shift ;;
   esac
 done
-printf '404'
+case "${payload}" in
+  *Claude-Sonnet-5-joybuilder*|*GPT-5.6-Terra-joybuilder*) printf '200' ;;
+  *GPT-5.6-Sol-joybuilder*)
+    [[ "${url}" == */responses ]] && printf '200' || printf '400'
+    ;;
+  *) printf '404' ;;
+esac
 FAKE_CURL
   chmod 700 "${fake_bin}/curl"
 
@@ -598,7 +608,7 @@ test_jd_ccr_config_builder() {
   config=$(TOKEN='new-jd-token' CODEX_BASE_URL='http://llm-gw.jd.local/v1' \
     bash -c 'source "$1"; TOKEN=$2; CODEX_BASE_URL=$3; build_jd_ccr_config "$4" "$5"' bash \
       "${SCRIPT_PATH}" 'new-jd-token' 'http://llm-gw.jd.local/v1' \
-      '{"ok":true,"value":{"Providers":[{"id":"custom","name":"Custom"},{"id":"jd","name":"JD LLM Gateway","apiKey":"old","models":["old"]}]}}' \
+      '{"ok":true,"value":{"Providers":[{"id":"custom","name":"Custom"},{"id":"blackai-claude","name":"blackai-claude"},{"id":"jd","name":"JD LLM Gateway","apiKey":"old","models":["old"]},{"id":"bailian","name":"bailian"},{"id":"volcano-ai-gateway","name":"volcano-ai-gateway"},{"id":"blackai-gpt","name":"blackai-gpt"}]}}' \
       '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]')
   jq -e '[.Providers[] | select(.id == "custom")] | length == 1' <<<"${config}" >/dev/null ||
     fail 'JD CCR merge did not preserve unrelated providers'
@@ -606,11 +616,18 @@ test_jd_ccr_config_builder() {
     fail 'JD CCR merge produced duplicate providers'
   jq -e '[.Providers[] | select(.id == "jd")][0]
     | .name == "京东网关"
-      and .type == "openai_responses"
+      and .type == "openai_chat_completions"
       and .baseUrl == "http://llm-gw.jd.local/v1"
       and .apiKey == "new-jd-token"
       and .models == ["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]' \
     <<<"${config}" >/dev/null || fail 'JD CCR provider was rendered incorrectly'
+  jq -e '[.Providers[] | select(.id == "volcano-ai-gateway" or .id == "bailian" or .id == "blackai-gpt" or .id == "blackai-claude" or .id == "jd") | .id] == ["volcano-ai-gateway","bailian","blackai-gpt","blackai-claude","jd"]' \
+    <<<"${config}" >/dev/null || fail 'JD CCR merge did not preserve the five-gateway priority order'
+  jq -e '[.Providers[] | select(.id == "volcano-ai-gateway")][0].name == "火山AI网关"
+    and [.Providers[] | select(.id == "bailian")][0].name == "蓝区百炼"
+    and [.Providers[] | select(.id == "blackai-gpt")][0].name == "BlackAI GPT"
+    and [.Providers[] | select(.id == "blackai-claude")][0].name == "BlackAI Claude"' \
+    <<<"${config}" >/dev/null || fail 'JD CCR merge did not normalize provider display names'
   pass 'JD provider merges into the unified CCR configuration'
 }
 

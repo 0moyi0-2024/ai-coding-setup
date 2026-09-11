@@ -190,9 +190,10 @@ systemctl status ai-coding-setup-ccr.service
 ## 使用 Codex
 
 Codex 会把已配置 token 对应的 provider 注册到全局配置，同时为每个 token 保留独立
-profile。普通 `codex` 通过 CCR 使用统一模型列表；已启用的火山、百炼、BlackAI GPT 和
-BlackAI Claude/Grok 模型会以 `网关名/模型名` 展示。支持完整 Codex 工具协议的网关也可以
-直接使用对应的 `--profile`：
+profile。普通 `codex` 默认通过 CCR 使用火山网关模型，并在 `/model` 中展示所有已启用、
+已验证网关的模型。模型统一使用 `网关名/模型名`，例如 `火山AI网关/glm-5.3` 和
+`京东网关/GPT-5.6-Sol-joybuilder`；用户选中哪个前缀，就会使用该网关对应的 token。
+支持完整 Codex 工具协议的网关也可以直接使用对应的 `--profile`：
 
 ```bash
 codex --profile volcano
@@ -200,6 +201,11 @@ codex --profile bailian
 codex --profile blackai-gpt
 codex --profile blackai-claude
 ```
+
+统一列表和同名模型的网关优先顺序为：火山、百炼、BlackAI GPT、BlackAI Claude、JD。
+由于列表中的名称带有网关前缀，即使多个网关都提供同一个原始模型名，也会显示为不同条目，
+不会错误共用 token。显式选择带前缀模型时会精确路由；只有手工传入不带网关前缀的同名模型
+时，CCR 才会按照上述 provider 顺序尝试。
 
 火山网关的原生 Responses 接口不支持 Codex 的 `additional_tools`、`namespace` 等工具项，
 因此不要使用 `codex --profile volcano` 执行需要工具的会话。请通过 CCR 使用火山模型，
@@ -234,22 +240,25 @@ Codex 主配置追加一个不含 token 的 JD provider 注册，并把已验证
 统一模型列表，使普通 `codex` 的 `/model` 同时显示原有网关和 `京东网关/...` 模型。
 安装器生成的 `codex` 启动器会读取显式会话 ID 的元数据，并按原会话的
 provider 自动叠加 `volcano`、`bailian`、`blackai-gpt`、`blackai-claude` 或 `jd` profile，
-使 `/model` 显示对应网关的 catalog。命令中显式提供的 `--profile` 优先，可以用另一个网关
-继续已有会话。已保存过 token 时，交互运行可直接按 Enter 保留原值；非交互运行会优先使用
-当前环境中的值，否则复用 `/agent/env.sh` 中保存的值。
+使 `/model` 显示对应网关的 catalog。命令中显式提供的 `--profile` 优先；在 `resume` 或
+`fork` 中指定这五个 profile 时，启动器会把它转换成 CCR 的带前缀模型路由。这样既能选择
+目标 token，也能由 CCR 把原会话历史转换为目标网关支持的协议。已保存过 token 时，交互
+运行可直接按 Enter 保留原值；非交互运行会优先使用当前环境中的值，否则复用
+`/agent/env.sh` 中保存的值。
 
 - Codex 会生成独立 profile 文件：`$CODEX_HOME/jd.config.toml`。未设置 `CODEX_HOME`
   时，本安装器环境写入 `/agent/config/codex/jd.config.toml`；普通环境写入
   `~/.codex/jd.config.toml`。
-- 同时生成 JD 独立模型 catalog：`$CODEX_HOME/catalogs/jd.json`；模型列表只包含探测成功
-  的 JD 模型，不会继承全局配置里的火山模型。JD catalog 使用标准 Responses 历史格式，
-  因此从其他 provider 切换或恢复的长会话不会携带 JD 网关不支持的 Responses Lite 项。
+- 同时生成 JD 独立模型 catalog：`$CODEX_HOME/catalogs/jd.json`；模型列表只包含同时通过
+  Responses 和 Chat Completions 验证的 JD 模型，不会继承全局配置里的火山模型。普通
+  `codex --profile jd` 仍可直接访问 JD；跨网关 `resume/fork --profile jd` 会通过 CCR 的
+  Chat Completions 适配转换历史，避免 JD Responses 接口拒绝其他网关保存的消息数组。
 - `$CODEX_HOME/config.toml` 只增加带受管标记的 `[model_providers.jd]` 注册；不会改变原来的
   `model_provider`、`model` 或其他 provider。CCR 中会追加或更新同一个 JD provider，并保留
   已有 provider 和默认路由。这个注册使不带 `--profile jd` 的
-  `codex resume <JD会话ID>` 也能识别会话中保存的 JD provider。`codex` 启动器会进一步
-  自动转换为等效的 `codex --profile jd resume <JD会话ID>`，因此恢复后 `/model` 使用
-  `catalogs/jd.json`，不会回到基础配置的火山模型列表。
+  `codex resume <JD会话ID>` 也能识别会话中保存的 JD provider。裸 `resume` 会自动加载
+  原会话对应的独立 profile；显式 `resume --profile <目标网关>` 则通过 CCR 切换到目标网关，
+  并继续使用统一的带前缀模型 catalog。
 
 恢复会话时可以保留原网关，也可以显式切换网关：
 
@@ -260,6 +269,12 @@ codex resume <会话ID>
 # 使用 JD 网关继续已有会话；两种写法等价
 codex resume <会话ID> --profile jd
 codex --profile jd resume <会话ID>
+
+# 也可切换到其他已生成的网关 profile
+codex resume <会话ID> --profile volcano
+codex resume <会话ID> --profile bailian
+codex resume <会话ID> --profile blackai-gpt
+codex resume <会话ID> --profile blackai-claude
 ```
 
 普通启动时也可以直接从统一列表选 JD：
@@ -271,7 +286,8 @@ codex
 
 通过统一列表启动的会话会记录 `claude-code-router` provider 和带网关前缀的模型名；裸
 `resume` 会继续通过 CCR 路由到原来的网关。通过独立 profile 启动的会话会记录对应的直接
-provider；启动器会在裸 `resume <会话ID>` 时自动恢复相应 profile。
+provider；启动器会在裸 `resume <会话ID>` 时自动恢复相应 profile。显式附加另一个网关的
+`--profile` 时，启动器会改用 CCR 和目标网关前缀，并保留原会话 ID 与历史。
 
 - 安装器布局中，脚本把 `JD_GATEWAY_TOKEN` 直接追加到 `/agent/env.sh` 的受管区块，并把
   文件权限设置为 `600`；不会另外生成 `jd.env`。主安装器以后重写 `/agent/env.sh` 时会
@@ -514,8 +530,9 @@ bash ./set_jd_gateway_config.sh --codex-only
 source "/agent/env.sh"
 ```
 
-这会重新探测 JD 模型、把 JD provider 追加到现有 CCR，并验证 CCR 的真实 `/v1/models`
-结果；火山、百炼和 BlackAI provider 会保留。若要完整重建并验证全部五个网关：
+这会重新探测 JD 模型、把 JD provider 追加到现有 CCR，强制刷新 CCR 网关，并通过一次
+带 `京东网关/` 前缀的实际请求验证路由；火山、百炼和 BlackAI provider 会保留。若要完整
+重建并验证全部五个网关：
 
 ```bash
 bash ./set_claude_provider_keys.sh --configure-only

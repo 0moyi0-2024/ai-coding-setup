@@ -171,11 +171,30 @@ render_codex_launcher() {
     printf 'readonly AI_SETUP_CODEX_REAL_BIN=%q\n' "${real_codex_bin}"
     cat <<'LAUNCHER'
 ai_setup_has_profile=0
+ai_setup_explicit_profile=''
+ai_setup_explicit_model=''
 ai_setup_resume_command=0
 ai_setup_session_id=''
-for ai_setup_arg in "$@"; do
+ai_setup_original_args=("$@")
+for ((ai_setup_i=0; ai_setup_i<${#ai_setup_original_args[@]}; ai_setup_i+=1)); do
+  ai_setup_arg=${ai_setup_original_args[ai_setup_i]}
   case "${ai_setup_arg}" in
-    -p|--profile|--profile=*) ai_setup_has_profile=1 ;;
+    -p|--profile)
+      ai_setup_has_profile=1
+      if ((ai_setup_i + 1 < ${#ai_setup_original_args[@]})); then
+        ai_setup_explicit_profile=${ai_setup_original_args[ai_setup_i + 1]}
+      fi
+      ;;
+    --profile=*)
+      ai_setup_has_profile=1
+      ai_setup_explicit_profile=${ai_setup_arg#*=}
+      ;;
+    -m|--model)
+      if ((ai_setup_i + 1 < ${#ai_setup_original_args[@]})); then
+        ai_setup_explicit_model=${ai_setup_original_args[ai_setup_i + 1]}
+      fi
+      ;;
+    --model=*) ai_setup_explicit_model=${ai_setup_arg#*=} ;;
     resume|fork) ai_setup_resume_command=1 ;;
   esac
   if ((ai_setup_resume_command)) &&
@@ -184,6 +203,56 @@ for ai_setup_arg in "$@"; do
     ai_setup_session_id=${ai_setup_arg}
   fi
 done
+
+# A provider switch while resuming must keep Codex on CCR. CCR owns the
+# gateway-prefixed catalog and converts the saved Responses history to the
+# target provider protocol. Directly layering (for example) the JD profile can
+# send another provider's Responses history unchanged to JD and be rejected.
+if ((ai_setup_has_profile && ai_setup_resume_command)); then
+  case "${ai_setup_explicit_profile}" in
+    volcano) ai_setup_profile_prefix='火山AI网关' ;;
+    bailian) ai_setup_profile_prefix='蓝区百炼' ;;
+    blackai-gpt) ai_setup_profile_prefix='BlackAI GPT' ;;
+    blackai-claude) ai_setup_profile_prefix='BlackAI Claude' ;;
+    jd) ai_setup_profile_prefix='京东网关' ;;
+    *) ai_setup_profile_prefix='' ;;
+  esac
+  ai_setup_profile_file="${CODEX_HOME}/${ai_setup_explicit_profile}.config.toml"
+  if [[ -n "${ai_setup_profile_prefix}" &&
+        -r "${CODEX_HOME}/claude-code-router.config.toml" &&
+        -r "${CODEX_HOME}/ccr-model-catalog.json" &&
+        -r "${ai_setup_profile_file}" ]]; then
+    ai_setup_target_model=${ai_setup_explicit_model}
+    if [[ -z "${ai_setup_target_model}" ]]; then
+      ai_setup_target_model=$(awk -F '[[:space:]]*=[[:space:]]*' '
+        $1 == "model" {
+          value=$2
+          sub(/^"/, "", value)
+          sub(/"[[:space:]]*$/, "", value)
+          print value
+          exit
+        }
+      ' "${ai_setup_profile_file}")
+    fi
+    if [[ -n "${ai_setup_target_model}" ]]; then
+      [[ "${ai_setup_target_model}" == */* ]] ||
+        ai_setup_target_model="${ai_setup_profile_prefix}/${ai_setup_target_model}"
+      ai_setup_rewritten_args=()
+      for ((ai_setup_i=0; ai_setup_i<${#ai_setup_original_args[@]}; ai_setup_i+=1)); do
+        ai_setup_arg=${ai_setup_original_args[ai_setup_i]}
+        case "${ai_setup_arg}" in
+          -p|--profile|-m|--model) ai_setup_i=$((ai_setup_i + 1)) ;;
+          --profile=*|--model=*) ;;
+          *) ai_setup_rewritten_args+=("${ai_setup_arg}") ;;
+        esac
+      done
+      exec "${AI_SETUP_CODEX_REAL_BIN}" \
+        -c 'model_provider="claude-code-router"' \
+        -m "${ai_setup_target_model}" "${ai_setup_rewritten_args[@]}"
+    fi
+  fi
+fi
+
 if (( ! ai_setup_has_profile )) && [[ -n "${ai_setup_session_id}" ]]; then
   ai_setup_session_file=$(find "${CODEX_HOME}/sessions" -type f \
     -name "rollout-*-${ai_setup_session_id}.jsonl" -print -quit 2>/dev/null || true)
@@ -1423,6 +1492,24 @@ build_ccr_config() {
   local blackai_gpt_models=${16:-'[]'}
   local jd_key=${17:-}
   local jd_models=${18:-'[]'}
+  local default_provider_name='' default_model=''
+
+  if [[ -n "${volcano_fast_model}" ]]; then
+    default_provider_name='火山AI网关'
+    default_model=${volcano_fast_model}
+  elif (( $(jq 'length' <<<"${bailian_models}") > 0 )); then
+    default_provider_name='蓝区百炼'
+    default_model=$(jq -r '.[0]' <<<"${bailian_models}")
+  elif (( $(jq 'length' <<<"${blackai_gpt_models}") > 0 )); then
+    default_provider_name='BlackAI GPT'
+    default_model=$(jq -r '.[0]' <<<"${blackai_gpt_models}")
+  elif (( $(jq 'length' <<<"${blackai_claude_models}") > 0 )); then
+    default_provider_name='BlackAI Claude'
+    default_model=$(jq -r '.[0]' <<<"${blackai_claude_models}")
+  elif (( $(jq 'length' <<<"${jd_models}") > 0 )); then
+    default_provider_name='京东网关'
+    default_model=$(jq -r '.[0]' <<<"${jd_models}")
+  fi
 
   jq \
     --arg local_key "${local_key}" \
@@ -1442,6 +1529,8 @@ build_ccr_config() {
     --argjson blackai_gpt_models "${blackai_gpt_models}" \
     --arg jd_key "${jd_key}" \
     --argjson jd_models "${jd_models}" \
+    --arg default_provider_name "${default_provider_name}" \
+    --arg default_model "${default_model}" \
     --arg claude_settings_file "${CLAUDE_SETTINGS_FILE}" \
     --arg codex_home "${CODEX_DIR}" \
     '.value as $cfg
@@ -1451,16 +1540,25 @@ build_ccr_config() {
      | ([$cfg.Providers[]? | select(.id == "xiyu" or .name == "蓝区稀宇")][0].apiKey // "") as $old_xiyu
      | ([$cfg.Providers[]? | select(.id == "blackai-claude" or .name == "BlackAI Claude")][0].apiKey // "") as $old_blackai_claude
      | ([$cfg.Providers[]? | select(.id == "blackai-gpt" or .name == "BlackAI GPT")][0].apiKey // "") as $old_blackai_gpt
+     | ([$cfg.Providers[]? | select(
+         .id == "jd" or .name == "京东网关" or .name == "JD LLM Gateway"
+       )][0] // {}) as $old_jd
      | (if $volcano_key != "" then $volcano_key else $old_volcano end) as $volcano
      | (if $bailian_key != "" then $bailian_key else $old_bailian end) as $bailian
      | (if $blackai_claude_key != "" then $blackai_claude_key else $old_blackai_claude end) as $blackai_claude
      | (if $blackai_gpt_key != "" then $blackai_gpt_key else $old_blackai_gpt end) as $blackai_gpt
+     | (if $jd_key != "" then $jd_key else ($old_jd.apiKey // "") end) as $jd
+     | (if ($jd_models | length) > 0 then $jd_models else ($old_jd.models // []) end) as $effective_jd_models
+     | ([$cfg.Providers[]? | select(
+         (.id != "volcano-ai-gateway" and .name != "火山AI网关") and
+         (.id != "bailian" and .name != "蓝区百炼") and
+         (.id != "zhipu" and .name != "蓝区智谱") and
+         (.id != "xiyu" and .name != "蓝区稀宇") and
+         (.id != "blackai-claude" and .name != "BlackAI Claude") and
+         (.id != "blackai-gpt" and .name != "BlackAI GPT") and
+         (.id != "jd" and .name != "京东网关" and .name != "JD LLM Gateway")
+       )]) as $other_providers
      | ($cfg // {})
-     | if ($jd_key != "" and ($jd_models | length) > 0) then
-         .Providers = [.Providers[]? | select(
-           .id != "jd" and .name != "京东网关" and .name != "JD LLM Gateway"
-         )]
-       else . end
      | .profile = (.profile // {})
      | .profile.profiles = (.profile.profiles // [])
      | .APIKEY = $local_key
@@ -1473,16 +1571,7 @@ build_ccr_config() {
              corePort:$core_port
            })
      | .routerEndpoint = $gateway_url
-     | .Providers = (
-         [.Providers[]? | select(
-           (.id != "volcano-ai-gateway" and .name != "火山AI网关") and
-           (.id != "bailian" and .name != "蓝区百炼") and
-           (.id != "zhipu" and .name != "蓝区智谱") and
-           (.id != "xiyu" and .name != "蓝区稀宇")
-           and (.id != "blackai-claude" and .name != "BlackAI Claude")
-           and (.id != "blackai-gpt" and .name != "BlackAI GPT")
-         )] +
-         [{
+     | .Providers = ([{
            id:"volcano-ai-gateway", name:"火山AI网关",
            enabled:($volcano != "" and $volcano != "Your API Key" and ($volcano_models | length) > 0),
            baseUrl:"https://st8tp3ajl0df3n8b8l8qu.apigateway-cn-beijing.volceapi.com/v1",
@@ -1507,12 +1596,15 @@ build_ccr_config() {
            apiKey:$blackai_claude, type:"openai_chat_completions",
            models:$blackai_claude_models
          },
-         (if ($jd_key != "" and ($jd_models | length) > 0) then {
-           id:"jd", name:"京东网关", enabled:true,
-           baseUrl:"http://llm-gw.jd.local/v1",
-           apiKey:$jd_key, type:"openai_responses",
-           models:$jd_models
-         } else empty end),{
+         (if ($jd != "" and ($effective_jd_models | length) > 0) then
+           ($old_jd + {
+             id:"jd", name:"京东网关", enabled:true,
+             baseUrl:"http://llm-gw.jd.local/v1",
+             apiKey:$jd, type:"openai_chat_completions",
+             models:$effective_jd_models
+           })
+         else empty end)
+       ] + $other_providers + [{
            id:"zhipu", name:"蓝区智谱", enabled:false,
            baseUrl:"https://open.bigmodel.cn/api/paas/v4",
            apiKey:$old_zhipu, type:"openai_chat_completions",
@@ -1523,9 +1615,10 @@ build_ccr_config() {
            apiKey:$old_xiyu, type:"anthropic_messages", models:["MiniMax-M3"]
          }]
        )
-     | .preferredProvider = (if $volcano_fast_model != "" then "火山AI网关"
-                             elif ($bailian_models | length) > 0 then "蓝区百炼"
+     | .preferredProvider = (if $default_provider_name != "" then $default_provider_name
                              else (.preferredProvider // "") end)
+     | .defaultOpenAIModel = (if $default_model != "" then $default_model
+                              else (.defaultOpenAIModel // "") end)
      | if $volcano_fast_model != "" then
          .profile.claudeCode.model = ("火山AI网关/" + $volcano_fast_model)
          | .profile.claudeCode.settingsFile = $claude_settings_file
@@ -1542,6 +1635,11 @@ build_ccr_config() {
            | .opusModel = ("火山AI网关/" + $volcano_pro_model)
          elif .agent == "codex" then
            .codexHome = $codex_home
+           | .providerId = "claude-code-router"
+           | .providerName = "Claude Code Router"
+           | if $default_provider_name != "" and $default_model != "" then
+               .model = ($default_provider_name + "/" + $default_model)
+             else . end
          else . end
        )' <<<"${config_response}"
 }
@@ -1549,7 +1647,7 @@ build_ccr_config() {
 save_ccr_config() {
   local config=$1
   local save_request save_response
-  save_request=$(jq '{method:"saveConfig",args:[.,{applyProfile:false}]}' <<<"${config}")
+  save_request=$(jq '{method:"saveConfig",args:[.,{applyProfile:true}]}' <<<"${config}")
   save_response=$(ccr_rpc "${save_request}")
   require_ccr_rpc_success "${save_response}" "Failed to save CCR configuration."
 }
@@ -1677,6 +1775,22 @@ configure_gateway_keys() {
   export "${GATEWAY_KEY_NAMES[@]}"
 }
 
+ccr_config_includes_provider_catalog() {
+  local response=$1
+  local provider_id=$2
+  local provider_name=$3
+  local provider_type=$4
+  local models=$5
+  jq -e --arg id "${provider_id}" --arg name "${provider_name}" \
+    --arg type "${provider_type}" --argjson expected "${models}" '
+    [.value.Providers[]? | select(
+      .id == $id and .name == $name and .type == $type and .enabled != false
+    )][0] as $provider
+    | $provider != null
+      and (($provider.models // [] | unique | sort) == ($expected | unique | sort))
+  ' <<<"${response}" >/dev/null 2>&1
+}
+
 ccr_models_include_provider_catalog() {
   local response=$1
   local provider_name=$2
@@ -1685,6 +1799,24 @@ ccr_models_include_provider_catalog() {
     [.data[]? | if type == "object" then .id elif type == "string" then . else empty end] as $actual
     | all($expected[]; . as $model | ($actual | index($provider + "/" + $model)) != null)
   ' <<<"${response}" >/dev/null 2>&1
+}
+
+probe_ccr_routed_model() {
+  local gateway_url=$1
+  local local_key=$2
+  local provider_name=$3
+  local models=$4
+  local model payload response_file status response
+  model=$(jq -r '.[0] // empty' <<<"${models}")
+  [[ -n "${model}" ]] || return 0
+  payload=$(jq -cn --arg model "${provider_name}/${model}"     '{model:$model,input:"Reply with OK.",max_output_tokens:16,stream:false}')
+  response_file=$(mktemp "${TMPDIR:-/tmp}/ai-setup-ccr-route.XXXXXXXX")
+  status=$(curl --silent --show-error --max-time 90     --output "${response_file}" --write-out '%{http_code}'     -H "Authorization: Bearer ${local_key}"     -H 'content-type: application/json'     --data-binary "${payload}" "${gateway_url%/}/v1/responses" 2>/dev/null || true)
+  response=$(cat "${response_file}" 2>/dev/null || true)
+  rm -f -- "${response_file}"
+  [[ "${status}" =~ ^2[0-9][0-9]$ ]] ||
+    die "CCR could not route ${provider_name}/${model} to its configured provider (HTTP ${status:-none}). Response: $(head -c 500 <<<"${response:-<empty body>}")"
+  log "CCR route verified: ${provider_name}/${model}"
 }
 
 verify_setup() {
@@ -1746,17 +1878,21 @@ verify_setup() {
   jq -e '.data | type == "array" and length > 0' <<<"${models_response}" >/dev/null ||
     die "CCR model discovery returned no models. Response: $(head -c 500 <<<"${models_response}")"
 
-  local provider_name provider_models
-  while IFS=$'\t' read -r provider_name provider_models; do
+  local runtime_config provider_id provider_name provider_type provider_models
+  runtime_config=$(fetch_ccr_config)
+  while IFS=$'\t' read -r provider_id provider_name provider_type provider_models; do
     [[ "${provider_models}" != '[]' ]] || continue
+    ccr_config_includes_provider_catalog "${runtime_config}" "${provider_id}"       "${provider_name}" "${provider_type}" "${provider_models}" ||
+      die "CCR runtime configuration is missing or mismatches provider ${provider_name}. Re-run the matching gateway setup script."
     ccr_models_include_provider_catalog "${models_response}" "${provider_name}" "${provider_models}" ||
       die "CCR runtime model list is missing one or more configured ${provider_name} models. Re-run the matching gateway setup script."
+    probe_ccr_routed_model "${gateway_url}" "${local_key}" "${provider_name}" "${provider_models}"
   done <<EOF
-火山AI网关	${VOLCANO_MODELS}
-蓝区百炼	${BAILIAN_MODELS}
-BlackAI GPT	${BLACKAI_GPT_MODELS}
-BlackAI Claude	${BLACKAI_CLAUDE_MODELS}
-京东网关	${JD_MODELS}
+volcano-ai-gateway	火山AI网关	openai_chat_completions	${VOLCANO_MODELS}
+bailian	蓝区百炼	openai_chat_completions	${BAILIAN_MODELS}
+blackai-gpt	BlackAI GPT	openai_responses	${BLACKAI_GPT_MODELS}
+blackai-claude	BlackAI Claude	openai_chat_completions	${BLACKAI_CLAUDE_MODELS}
+jd	京东网关	openai_chat_completions	${JD_MODELS}
 EOF
   log "CCR gateway state: ${state}; model discovery: ok"
 }

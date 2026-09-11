@@ -239,18 +239,33 @@ build_jd_ccr_config() {
         .id == "jd" or .name == "京东网关" or .name == "JD LLM Gateway"
       )][0] // {}) as $old_jd
     | ($cfg // {})
+    | .Providers |= map(
+        if .id == "volcano-ai-gateway" then .name = "火山AI网关"
+        elif .id == "bailian" then .name = "蓝区百炼"
+        elif .id == "blackai-gpt" then .name = "BlackAI GPT"
+        elif .id == "blackai-claude" then .name = "BlackAI Claude"
+        else . end
+      )
     | .Providers = (
-        [.Providers[]? | select(
+        [
+          ([.Providers[]? | select(.id == "volcano-ai-gateway")][0] // empty),
+          ([.Providers[]? | select(.id == "bailian")][0] // empty),
+          ([.Providers[]? | select(.id == "blackai-gpt")][0] // empty),
+          ([.Providers[]? | select(.id == "blackai-claude")][0] // empty),
+          ($old_jd + {
+            id:"jd",
+            name:"京东网关",
+            enabled:true,
+            baseUrl:$base_url,
+            apiKey:$token,
+            type:"openai_chat_completions",
+            models:$models
+          })
+        ] + [.Providers[]? | select(
+          .id != "volcano-ai-gateway" and .id != "bailian" and
+          .id != "blackai-gpt" and .id != "blackai-claude" and
           .id != "jd" and .name != "京东网关" and .name != "JD LLM Gateway"
-        )] + [($old_jd + {
-          id:"jd",
-          name:"京东网关",
-          enabled:true,
-          baseUrl:$base_url,
-          apiKey:$token,
-          type:"openai_responses",
-          models:$models
-        })]
+        )]
       )' <<<"${config_response}"
 }
 
@@ -302,6 +317,10 @@ configure_jd_ccr_provider() {
   response=$(jd_ccr_rpc "${request}")
   [[ "$(jq -r '.ok // false' <<<"${response}")" == true ]] ||
     die "无法把 JD provider 写入 CCR: $(jq -r '.error.message // "未知错误"' <<<"${response}")"
+  response=$(jd_ccr_rpc '{"method":"restartGateway","args":[]}')
+  [[ "$(jq -r '.ok // false' <<<"${response}")" == true &&
+     "$(jq -r '.value.state // empty' <<<"${response}")" == running ]] ||
+    die "CCR 已保存 JD provider，但网关重启失败: $(jq -r '.error.message // .value.lastError // "未知错误"' <<<"${response}")"
 
   catalog="${AGENT_DIR}/config/codex/ccr-model-catalog.json"
   for ((attempt=1; attempt<=30; attempt+=1)); do
@@ -312,9 +331,13 @@ configure_jd_ccr_provider() {
     die 'CCR 已保存 JD provider，但统一 Codex 模型 catalog 未刷新'
 
   runtime_config=$(jd_ccr_rpc '{"method":"getConfig","args":[]}')
-  jq -e --argjson expected "${models}" '
-    [.value.Providers[]? | select(.id == "jd" and .type == "openai_responses")][0]
-    | .enabled != false and .models == $expected
+  jq -e --argjson expected "${models}" --arg base_url "${CODEX_BASE_URL%/}" '
+    [.value.Providers[]? | select(
+      .id == "jd" and .name == "京东网关" and .type == "openai_chat_completions"
+    )][0]
+    | .enabled != false
+      and ((.baseUrl // .api_base_url // "") | rtrimstr("/")) == $base_url
+      and (.models == $expected)
   ' <<<"${runtime_config}" >/dev/null ||
     die 'CCR 保存后的运行配置中没有可用的 JD provider'
   local_key=$(jq -r '.value.APIKEY // .value.APIKEYS[0].key // empty' <<<"${runtime_config}")
@@ -338,6 +361,17 @@ configure_jd_ccr_provider() {
   rm -f -- "${models_tmp}"
   ccr_response_contains_jd_models "${models_response}" "${models}" ||
     die 'CCR 运行时模型列表没有包含全部 JD 模型；请检查 CCR provider 状态'
+
+  local route_model route_payload route_http route_response
+  route_model=${model_names[0]}
+  route_payload=$(jq -cn --arg model "京东网关/${route_model}"     '{model:$model,input:"Reply with OK.",max_output_tokens:16,stream:false}')
+  : >"${models_tmp}"
+  route_http=$(curl --silent --show-error --max-time 90     --output "${models_tmp}" --write-out '%{http_code}'     -H "Authorization: Bearer ${local_key}"     -H 'content-type: application/json'     --data-binary "${route_payload}" "${gateway_url%/}/v1/responses" 2>/dev/null || true)
+  route_response=$(cat "${models_tmp}" 2>/dev/null || true)
+  rm -f -- "${models_tmp}"
+  [[ "${route_http}" =~ ^2[0-9][0-9]$ ]] ||
+    die "CCR 无法把 京东网关/${route_model} 路由到 JD provider (HTTP ${route_http:-none}): $(head -c 500 <<<"${route_response:-<empty body>}")"
+  log "CCR 路由验证成功: 京东网关/${route_model}"
   log "已把 ${#model_names[@]} 个 JD 模型追加到默认 Codex/CCR 模型列表"
 }
 
@@ -552,21 +586,28 @@ probe_claude_models() {
 probe_codex_models() {
   local -a candidates=("$@")
   local verified=()
-  local model status payload
-  log "探测 Codex 端点 ${CODEX_BASE_URL} ..."
+  local model responses_status chat_status responses_payload chat_payload
+  log "探测 Codex Responses 和 Chat Completions 端点 ${CODEX_BASE_URL} ..."
   for model in "${candidates[@]}"; do
-    payload=$(jq -cn --arg m "${model}" \
+    responses_payload=$(jq -cn --arg m "${model}" \
       '{model:$m,input:"Reply OK.",max_output_tokens:16,stream:false}')
-    status=$(curl --silent --show-error --max-time 30 --output /dev/null \
+    responses_status=$(curl --silent --show-error --max-time 30 --output /dev/null \
       --write-out '%{http_code}' \
       -H "Authorization: Bearer ${TOKEN}" \
       -H 'content-type: application/json' \
-      --data-binary "${payload}" "${CODEX_BASE_URL%/}/responses" 2>/dev/null || true)
-    if [[ "${status}" =~ ^2 ]]; then
+      --data-binary "${responses_payload}" "${CODEX_BASE_URL%/}/responses" 2>/dev/null || true)
+    chat_payload=$(jq -cn --arg m "${model}" \
+      '{model:$m,messages:[{role:"user",content:"Reply OK."}],max_tokens:16,stream:false}')
+    chat_status=$(curl --silent --show-error --max-time 30 --output /dev/null \
+      --write-out '%{http_code}' \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H 'content-type: application/json' \
+      --data-binary "${chat_payload}" "${CODEX_BASE_URL%/}/chat/completions" 2>/dev/null || true)
+    if [[ "${responses_status}" =~ ^2 && "${chat_status}" =~ ^2 ]]; then
       verified+=("${model}")
-      log "  ✓ ${model}"
+      log "  ✓ ${model} (Responses + Chat Completions)"
     else
-      warn "  ✗ ${model} (HTTP ${status:-请求失败})"
+      warn "  ✗ ${model} (Responses HTTP ${responses_status:-请求失败}, Chat HTTP ${chat_status:-请求失败})"
     fi
   done
   if (( ${#verified[@]} == 0 )); then
@@ -899,11 +940,30 @@ render_codex_launcher() {
     printf 'readonly AI_SETUP_CODEX_REAL_BIN=%q\n' "${real_codex_bin}"
     cat <<'LAUNCHER'
 ai_setup_has_profile=0
+ai_setup_explicit_profile=''
+ai_setup_explicit_model=''
 ai_setup_resume_command=0
 ai_setup_session_id=''
-for ai_setup_arg in "$@"; do
+ai_setup_original_args=("$@")
+for ((ai_setup_i=0; ai_setup_i<${#ai_setup_original_args[@]}; ai_setup_i+=1)); do
+  ai_setup_arg=${ai_setup_original_args[ai_setup_i]}
   case "${ai_setup_arg}" in
-    -p|--profile|--profile=*) ai_setup_has_profile=1 ;;
+    -p|--profile)
+      ai_setup_has_profile=1
+      if ((ai_setup_i + 1 < ${#ai_setup_original_args[@]})); then
+        ai_setup_explicit_profile=${ai_setup_original_args[ai_setup_i + 1]}
+      fi
+      ;;
+    --profile=*)
+      ai_setup_has_profile=1
+      ai_setup_explicit_profile=${ai_setup_arg#*=}
+      ;;
+    -m|--model)
+      if ((ai_setup_i + 1 < ${#ai_setup_original_args[@]})); then
+        ai_setup_explicit_model=${ai_setup_original_args[ai_setup_i + 1]}
+      fi
+      ;;
+    --model=*) ai_setup_explicit_model=${ai_setup_arg#*=} ;;
     resume|fork) ai_setup_resume_command=1 ;;
   esac
   if ((ai_setup_resume_command)) &&
@@ -912,6 +972,56 @@ for ai_setup_arg in "$@"; do
     ai_setup_session_id=${ai_setup_arg}
   fi
 done
+
+# A provider switch while resuming must keep Codex on CCR. CCR owns the
+# gateway-prefixed catalog and converts the saved Responses history to the
+# target provider protocol. Directly layering (for example) the JD profile can
+# send another provider's Responses history unchanged to JD and be rejected.
+if ((ai_setup_has_profile && ai_setup_resume_command)); then
+  case "${ai_setup_explicit_profile}" in
+    volcano) ai_setup_profile_prefix='火山AI网关' ;;
+    bailian) ai_setup_profile_prefix='蓝区百炼' ;;
+    blackai-gpt) ai_setup_profile_prefix='BlackAI GPT' ;;
+    blackai-claude) ai_setup_profile_prefix='BlackAI Claude' ;;
+    jd) ai_setup_profile_prefix='京东网关' ;;
+    *) ai_setup_profile_prefix='' ;;
+  esac
+  ai_setup_profile_file="${CODEX_HOME}/${ai_setup_explicit_profile}.config.toml"
+  if [[ -n "${ai_setup_profile_prefix}" &&
+        -r "${CODEX_HOME}/claude-code-router.config.toml" &&
+        -r "${CODEX_HOME}/ccr-model-catalog.json" &&
+        -r "${ai_setup_profile_file}" ]]; then
+    ai_setup_target_model=${ai_setup_explicit_model}
+    if [[ -z "${ai_setup_target_model}" ]]; then
+      ai_setup_target_model=$(awk -F '[[:space:]]*=[[:space:]]*' '
+        $1 == "model" {
+          value=$2
+          sub(/^"/, "", value)
+          sub(/"[[:space:]]*$/, "", value)
+          print value
+          exit
+        }
+      ' "${ai_setup_profile_file}")
+    fi
+    if [[ -n "${ai_setup_target_model}" ]]; then
+      [[ "${ai_setup_target_model}" == */* ]] ||
+        ai_setup_target_model="${ai_setup_profile_prefix}/${ai_setup_target_model}"
+      ai_setup_rewritten_args=()
+      for ((ai_setup_i=0; ai_setup_i<${#ai_setup_original_args[@]}; ai_setup_i+=1)); do
+        ai_setup_arg=${ai_setup_original_args[ai_setup_i]}
+        case "${ai_setup_arg}" in
+          -p|--profile|-m|--model) ai_setup_i=$((ai_setup_i + 1)) ;;
+          --profile=*|--model=*) ;;
+          *) ai_setup_rewritten_args+=("${ai_setup_arg}") ;;
+        esac
+      done
+      exec "${AI_SETUP_CODEX_REAL_BIN}" \
+        -c 'model_provider="claude-code-router"' \
+        -m "${ai_setup_target_model}" "${ai_setup_rewritten_args[@]}"
+    fi
+  fi
+fi
+
 if (( ! ai_setup_has_profile )) && [[ -n "${ai_setup_session_id}" ]]; then
   ai_setup_session_file=$(find "${CODEX_HOME}/sessions" -type f \
     -name "rollout-*-${ai_setup_session_id}.jsonl" -print -quit 2>/dev/null || true)
