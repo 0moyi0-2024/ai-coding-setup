@@ -573,6 +573,26 @@ PY
   pass 'inline token is escaped as valid TOML'
 }
 
+test_jd_ccr_runtime_model_validation() {
+  local response
+  response='{"data":[{"id":"火山AI网关/deepseek-v4-pro"},{"id":"京东网关/GPT-5.6-Sol-joybuilder"},"京东网关/GPT-6-Astra-joybuilder"]}'
+  if ! bash -c 'source "$1"; ccr_response_contains_jd_models "$2" "$3"' bash \
+      "${SCRIPT_PATH}" "${response}" \
+      '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]'; then
+    fail 'JD CCR runtime validation rejected the complete model list'
+  fi
+  if bash -c 'source "$1"; ccr_response_contains_jd_models "$2" "$3"' bash \
+      "${SCRIPT_PATH}" "${response}" \
+      '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder","GPT-missing"]'; then
+    fail 'JD CCR runtime validation accepted a missing model'
+  fi
+  if bash -c 'source "$1"; ccr_response_contains_jd_models "$2" "$3"' bash \
+      "${SCRIPT_PATH}" '{"data":[]}' '["GPT-5.6-Sol-joybuilder"]'; then
+    fail 'JD CCR runtime validation accepted a stale catalog without a runtime provider'
+  fi
+  pass 'JD CCR runtime model validation rejects catalog/provider drift'
+}
+
 test_jd_ccr_config_builder() {
   local config
   config=$(TOKEN='new-jd-token' CODEX_BASE_URL='http://llm-gw.jd.local/v1' \
@@ -615,6 +635,7 @@ test_partial_model_availability
 test_dynamic_model_discovery
 test_catalog_failure_is_atomic
 test_inline_token_toml_escaping
+test_jd_ccr_runtime_model_validation
 test_jd_ccr_config_builder
 test_mode_validation
 printf '1..%d\n' "${TEST_COUNT}"

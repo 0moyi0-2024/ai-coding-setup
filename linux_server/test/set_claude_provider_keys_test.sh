@@ -502,7 +502,9 @@ test_ccr_config_builder() {
     'new-blackai-claude' \
     '["claude-sonnet-4-6","claude-fable-5"]' \
     'new-blackai-gpt' \
-    '["gpt-5.6-sol","gpt-5.6-terra"]')
+    '["gpt-5.6-sol","gpt-5.6-terra"]' \
+    'new-jd-token' \
+    '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]')
   assert_json "${config}" '.APIKEY == "new-local"' "set CCR local key"
   assert_json "${config}" '.gateway.port == 3456 and .gateway.corePort == 3457' "set CCR ports"
   assert_json "${config}" '[.Providers[] | select(.id == "custom")] | length == 1' "preserve custom provider"
@@ -511,6 +513,7 @@ test_ccr_config_builder() {
   assert_json "${config}" '[.Providers[] | select(.id == "bailian")][0].models == ["qwen3.7-plus"]' "use discovered Bailian models"
   assert_json "${config}" '[.Providers[] | select(.id == "blackai-claude" and .apiKey == "new-blackai-claude")][0].models == ["claude-sonnet-4-6","claude-fable-5"]' "use discovered BlackAI Claude models"
   assert_json "${config}" '[.Providers[] | select(.id == "blackai-gpt" and .apiKey == "new-blackai-gpt" and .type == "openai_responses")][0].models == ["gpt-5.6-sol","gpt-5.6-terra"]' "use discovered BlackAI GPT models in the unified CCR catalog"
+  assert_json "${config}" '[.Providers[] | select(.id == "jd" and .name == "京东网关" and .apiKey == "new-jd-token" and .type == "openai_responses")][0].models == ["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]' "restore JD in the unified CCR catalog"
   assert_json "${config}" '.profile.profiles[] | select(.agent == "claude-code") | .opusModel == "火山AI网关/deepseek-v4-pro"' "update Claude profile"
   pass "CCR configuration rendering"
 }
@@ -559,6 +562,14 @@ test_ccr_config_idempotence() {
     "CCR rerun does not duplicate BlackAI provider"
   assert_json "${second}" '[.Providers[] | select(.id == "blackai-claude")][0].apiKey == "blackai-old"' \
     "CCR rerun preserves BlackAI key"
+  local with_existing_jd
+  with_existing_jd=$(build_ccr_config \
+    '{"ok":true,"value":{"Providers":[{"id":"jd","name":"京东网关","apiKey":"existing-jd","type":"openai_responses","models":["existing-jd-model"]}],"profile":{"profiles":[]}}}' \
+    'local' '' '' '127.0.0.1' '3456' '3457' 'http://127.0.0.1:3456' \
+    '[]' '[]' '' '' '' '[]' '' '[]')
+  assert_json "${with_existing_jd}" '[.Providers[] | select(.id == "jd")][0]
+    | .apiKey == "existing-jd" and .models == ["existing-jd-model"]' \
+    "CCR rerun preserves JD when no persisted JD state is available"
   pass "CCR configuration idempotence"
 }
 
@@ -614,6 +625,28 @@ test_gateway_key_round_trip() {
   pass "gateway key persistence"
 }
 
+test_persisted_jd_gateway_recovery() {
+  local loaded_token='persisted JD token'
+  mkdir -p "${CODEX_MODEL_CATALOG_DIR}"
+  cat >"${AGENT_ENV_FILE}" <<EOF
+# BEGIN JD gateway token
+export JD_GATEWAY_TOKEN=$(printf '%q' "${loaded_token}")
+# END JD gateway token
+EOF
+  cat >"${CODEX_MODEL_CATALOG_DIR}/jd.json" <<'JSON'
+{"models":[{"slug":"GPT-5.6-Sol-joybuilder"},{"slug":"GPT-6-Astra-joybuilder"}]}
+JSON
+  unset JD_GATEWAY_TOKEN
+  JD_MODELS='[]'
+  load_persisted_jd_gateway >/dev/null
+  assert_eq "${loaded_token}" "${JD_GATEWAY_TOKEN}" "restore JD token from agent environment"
+  assert_eq '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]' "${JD_MODELS}" \
+    "restore JD models from the verified catalog"
+  unset JD_GATEWAY_TOKEN
+  JD_MODELS='[]'
+  pass "persisted JD gateway recovery"
+}
+
 test_service_pid_reader() {
   mkdir -p "${CCR_DIR}"
   printf '%s\n' '{"pid":12345}' >"${CCR_SERVICE_FILE}"
@@ -664,40 +697,51 @@ test_agent_layout() {
   pass "simple container-local agent layout"
 }
 
-test_codex_resume_uses_jd_profile() {
+test_codex_resume_uses_original_profile() {
   local jd_session_id='11111111-1111-4111-8111-111111111111'
   local volcano_session_id='22222222-2222-4222-8222-222222222222'
+  local bailian_session_id='33333333-3333-4333-8333-333333333333'
   local ccr_session_id='44444444-4444-4444-8444-444444444444'
+  local blackai_gpt_session_id='55555555-5555-4555-8555-555555555555'
+  local blackai_claude_session_id='66666666-6666-4666-8666-666666666666'
   local session_dir="${CODEX_DIR}/sessions/2026/09/11"
-  local output expected
+  local output expected profile session_id provider
   mkdir -p "${NODE_INSTALL_DIR}/bin" "${session_dir}"
   cat >"${NODE_INSTALL_DIR}/bin/codex" <<'FAKE_CODEX'
 #!/usr/bin/env bash
 printf '%s\n' "$@"
 FAKE_CODEX
   chmod 700 "${NODE_INSTALL_DIR}/bin/codex"
-  printf '%s\n' 'model_provider = "jd"' >"${CODEX_DIR}/jd.config.toml"
-  printf '%s\n' 'model_provider = "volcano-ai-gateway"' >"${CODEX_DIR}/volcano.config.toml"
-  printf '%s\n' \
-    '{"type":"session_meta","payload":{"model_provider":"jd"}}' \
-    >"${session_dir}/rollout-test-${jd_session_id}.jsonl"
-  printf '%s\n' \
-    '{"type":"session_meta","payload":{"model_provider":"volcano-ai-gateway"}}' \
-    >"${session_dir}/rollout-test-${volcano_session_id}.jsonl"
+
+  while IFS=$'\t' read -r profile session_id provider; do
+    printf 'model_provider = "%s"\n' "${provider}" >"${CODEX_DIR}/${profile}.config.toml"
+    printf '%s\n' \
+      "{\"type\":\"session_meta\",\"payload\":{\"model_provider\":\"${provider}\"}}" \
+      >"${session_dir}/rollout-test-${session_id}.jsonl"
+  done <<EOF
+jd	${jd_session_id}	jd
+volcano	${volcano_session_id}	volcano-ai-gateway
+bailian	${bailian_session_id}	bailian
+blackai-gpt	${blackai_gpt_session_id}	blackaicoding-gpt
+blackai-claude	${blackai_claude_session_id}	blackaicoding-claude
+EOF
   printf '%s\n' \
     '{"type":"session_meta","payload":{"model_provider":"claude-code-router"}}' \
     >"${session_dir}/rollout-test-${ccr_session_id}.jsonl"
 
   write_runtime_files
-  output=$("${AGENT_BIN_DIR}/codex" resume "${jd_session_id}")
-  expected=$(printf '%s\n' --profile jd resume "${jd_session_id}")
-  assert_eq "${expected}" "${output}" \
-    "bare resume automatically layers the JD profile"
-
-  output=$("${AGENT_BIN_DIR}/codex" resume "${volcano_session_id}")
-  expected=$(printf '%s\n' --profile volcano resume "${volcano_session_id}")
-  assert_eq "${expected}" "${output}" \
-    "bare resume automatically layers the original Volcano profile"
+  while IFS=$'\t' read -r profile session_id provider; do
+    output=$("${AGENT_BIN_DIR}/codex" resume "${session_id}")
+    expected=$(printf '%s\n' --profile "${profile}" resume "${session_id}")
+    assert_eq "${expected}" "${output}" \
+      "bare resume automatically layers the original ${provider} profile"
+  done <<EOF
+jd	${jd_session_id}	jd
+volcano	${volcano_session_id}	volcano-ai-gateway
+bailian	${bailian_session_id}	bailian
+blackai-gpt	${blackai_gpt_session_id}	blackaicoding-gpt
+blackai-claude	${blackai_claude_session_id}	blackaicoding-claude
+EOF
 
   output=$("${AGENT_BIN_DIR}/codex" resume "${volcano_session_id}" --profile jd)
   expected=$(printf '%s\n' resume "${volcano_session_id}" --profile jd)
@@ -708,7 +752,7 @@ FAKE_CODEX
   expected=$(printf '%s\n' resume "${ccr_session_id}")
   assert_eq "${expected}" "${output}" \
     "CCR resume keeps the base launcher behavior"
-  pass "Codex resume selects the original profile and honors explicit overrides"
+  pass "Codex resume selects all original gateway profiles and honors explicit overrides"
 }
 
 test_setup_user_ownership() {
@@ -1123,6 +1167,26 @@ FAKE_SQLITE_NPM
   pass "better-sqlite3 recovery"
 }
 
+test_ccr_provider_catalog_validation() {
+  local response
+  response='{"data":[{"id":"火山AI网关/deepseek-v4-pro"},{"id":"蓝区百炼/qwen-max"},"BlackAI GPT/gpt-5.6-sol",{"id":"BlackAI Claude/claude-sonnet-4-6"},{"id":"京东网关/GPT-5.6-Sol-joybuilder"}]}'
+  ccr_models_include_provider_catalog "${response}" '火山AI网关' '["deepseek-v4-pro"]' ||
+    fail "CCR runtime validation rejected Volcano models"
+  ccr_models_include_provider_catalog "${response}" '蓝区百炼' '["qwen-max"]' ||
+    fail "CCR runtime validation rejected Bailian models"
+  ccr_models_include_provider_catalog "${response}" 'BlackAI GPT' '["gpt-5.6-sol"]' ||
+    fail "CCR runtime validation rejected BlackAI GPT models"
+  ccr_models_include_provider_catalog "${response}" 'BlackAI Claude' '["claude-sonnet-4-6"]' ||
+    fail "CCR runtime validation rejected BlackAI Claude models"
+  ccr_models_include_provider_catalog "${response}" '京东网关' '["GPT-5.6-Sol-joybuilder"]' ||
+    fail "CCR runtime validation rejected JD models"
+  if ccr_models_include_provider_catalog "${response}" '京东网关' \
+      '["GPT-5.6-Sol-joybuilder","GPT-6-Astra-joybuilder"]'; then
+    fail "CCR runtime validation accepted a missing JD model"
+  fi
+  pass "CCR runtime catalog validation covers all five gateways"
+}
+
 test_ccr_connection_helpers() {
   local generated
   mkdir -p "${CCR_DIR}"
@@ -1166,7 +1230,7 @@ test_completion_hint() {
 
 require_command jq
 test_agent_layout
-test_codex_resume_uses_jd_profile
+test_codex_resume_uses_original_profile
 test_setup_user_ownership
 test_runtime_environment_path_idempotence
 test_bash_startup_configuration
@@ -1187,6 +1251,7 @@ test_ccr_config_idempotence
 test_stale_profile_cleanup
 test_secure_file_permissions
 test_gateway_key_round_trip
+test_persisted_jd_gateway_recovery
 test_service_pid_reader
 test_rolling_port_selection
 test_agent_file_collision
@@ -1198,6 +1263,7 @@ test_dnf_metadata_recovery
 test_cli_install_command
 test_cli_version_validation
 test_better_sqlite_rebuild
+test_ccr_provider_catalog_validation
 test_ccr_connection_helpers
 test_ccr_rpc_error
 test_completion_hint

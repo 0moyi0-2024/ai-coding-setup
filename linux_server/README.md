@@ -180,10 +180,11 @@ claude
 进入 Claude Code 后，通过 `/model` 查看 CCR 从已配置 token 发现的模型并进行选择。
 火山、百炼和 BlackAI Claude/Grok 的模型会按 provider 分组显示。
 
-查看 CCR 状态：
+查看 CCR 进程记录；如果系统支持 systemd，也可以查看服务状态：
 
 ```bash
-ccr status
+jq '{url, pid}' /agent/home/.claude-code-router/service.json
+systemctl status ai-coding-setup-ccr.service
 ```
 
 ## 使用 Codex
@@ -404,10 +405,21 @@ jq -r '.models[].slug' "/agent/config/codex/catalogs/jd.json"
 
 ## 以后如何重新运行
 
-主安装器重跑时会刷新 CCR 中的四个基础 provider，并保留已追加的 JD provider；同时从
-已有 `/agent/env.sh` 保留 JD token，`jd.config.toml`、`catalogs/jd.json` 和 `claude-jd`
-也不会被删除。因此普通 `claude` 和普通 `codex` 继续使用 CCR 统一路由，`claude-jd` 和
-`codex --profile jd` 仍可绕过 CCR 直接使用 JD，两种入口互不覆盖。
+主安装器重跑时会恢复完整的五网关配置。火山、百炼、BlackAI GPT 和 BlackAI Claude
+从 `/agent/config/codex/gateways.env` 恢复 token，并重新探测各自可用模型；JD 从
+`/agent/env.sh` 恢复 token，并从已验证的 `catalogs/jd.json` 恢复模型。随后脚本把五种
+provider 一起写回 CCR，并检查 CCR 运行时 `/v1/models` 是否包含每个已配置网关的模型。
+`jd.config.toml`、`catalogs/jd.json` 和 `claude-jd` 不会被删除。因此普通 `claude` 和普通
+`codex` 继续使用 CCR 统一路由，`claude-jd` 和 `codex --profile jd` 仍可绕过 CCR 直接使用
+JD，两种入口互不覆盖。
+
+机器重启时，systemd 服务直接使用 CCR 持久化配置恢复以上 provider，不需要重新输入 token。
+如果需要主动重建所有网关、端口、Codex profile 和 CCR 配置，运行：
+
+```bash
+bash ./set_claude_provider_keys.sh --configure-only
+source "/agent/env.sh"
+```
 
 只更新 token、端口和模型配置，不重新安装工具：
 
@@ -483,12 +495,47 @@ ss -ltnp | grep -E '127\.0\.0\.1:[0-9]+'
 systemd。此时不需要为了本脚本单独安装 npm 包；可以手动启动 CCR，或在已有的进程管理器
 （例如 Docker、Supervisor、runit）中托管 `/agent/bin/ccr-autostart`。
 
-### 修改了 token，但模型列表没有更新
+### 统一列表有模型，但请求被转发到错误网关
 
-重新运行：
+如果错误中出现类似以下内容：
+
+```text
+Model "京东网关/GPT-..." is not configured for target provider openai
+provider_name: volcano-ai-gateway
+```
+
+说明 Codex 模型 catalog 已有该模型，但 CCR 运行配置缺少对应 provider，二者状态不一致。
+更新代码后，在仓库的 `linux_server` 目录执行：
+
+```bash
+git pull
+source "/agent/env.sh"
+bash ./set_jd_gateway_config.sh --codex-only
+source "/agent/env.sh"
+```
+
+这会重新探测 JD 模型、把 JD provider 追加到现有 CCR，并验证 CCR 的真实 `/v1/models`
+结果；火山、百炼和 BlackAI provider 会保留。若要完整重建并验证全部五个网关：
 
 ```bash
 bash ./set_claude_provider_keys.sh --configure-only
+bash ./set_jd_gateway_config.sh --codex-only
+source "/agent/env.sh"
+```
+
+### 修改了 token，但模型列表没有更新
+
+基础四网关 token 更新后运行：
+
+```bash
+bash ./set_claude_provider_keys.sh --configure-only
+source "/agent/env.sh"
+```
+
+JD token 更新后运行：
+
+```bash
+bash ./set_jd_gateway_config.sh --codex-only
 source "/agent/env.sh"
 ```
 

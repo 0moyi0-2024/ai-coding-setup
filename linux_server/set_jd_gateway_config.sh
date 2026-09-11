@@ -264,6 +264,15 @@ ccr_catalog_contains_jd_models() {
   ' "${catalog}" >/dev/null 2>&1
 }
 
+ccr_response_contains_jd_models() {
+  local response=$1
+  local models=$2
+  jq -e --argjson expected "${models}" '
+    [.data[]? | if type == "object" then .id elif type == "string" then . else empty end] as $actual
+    | all($expected[]; . as $model | ($actual | index("京东网关/" + $model)) != null)
+  ' <<<"${response}" >/dev/null 2>&1
+}
+
 configure_jd_ccr_provider() {
   local -a model_names=("$@")
   if ((DRY_RUN)); then
@@ -282,6 +291,7 @@ configure_jd_ccr_provider() {
   start_ccr_if_needed || die 'CCR 服务无法启动；JD profile 已生成，但统一模型列表尚未更新'
 
   local models config_response config request response catalog attempt
+  local runtime_config local_key gateway_url models_response models_http models_tmp
   models=$(printf '%s\n' "${model_names[@]}" | jq -R . | jq -s .)
   config_response=$(jd_ccr_rpc '{"method":"getConfig","args":[]}')
   [[ "$(jq -r '.ok // false' <<<"${config_response}")" == true ]] ||
@@ -300,6 +310,34 @@ configure_jd_ccr_provider() {
   done
   ccr_catalog_contains_jd_models "${catalog}" "${models}" ||
     die 'CCR 已保存 JD provider，但统一 Codex 模型 catalog 未刷新'
+
+  runtime_config=$(jd_ccr_rpc '{"method":"getConfig","args":[]}')
+  jq -e --argjson expected "${models}" '
+    [.value.Providers[]? | select(.id == "jd" and .type == "openai_responses")][0]
+    | .enabled != false and .models == $expected
+  ' <<<"${runtime_config}" >/dev/null ||
+    die 'CCR 保存后的运行配置中没有可用的 JD provider'
+  local_key=$(jq -r '.value.APIKEY // .value.APIKEYS[0].key // empty' <<<"${runtime_config}")
+  gateway_url=$(jq -r '.value.routerEndpoint // empty' <<<"${runtime_config}")
+  [[ -n "${local_key}" && -n "${gateway_url}" ]] ||
+    die 'CCR 缺少本地客户端 key 或路由地址，无法验证统一模型列表'
+  models_tmp=$(mktemp "${TMPDIR:-/tmp}/jd-ccr-models.XXXXXXXX")
+  for ((attempt=1; attempt<=30; attempt+=1)); do
+    : >"${models_tmp}"
+    models_http=$(curl --silent --show-error --max-time 3 \
+      --output "${models_tmp}" --write-out '%{http_code}' \
+      -H "Authorization: Bearer ${local_key}" \
+      "${gateway_url%/}/v1/models" 2>/dev/null || true)
+    models_response=$(cat "${models_tmp}" 2>/dev/null || true)
+    if [[ "${models_http}" == 200 ]] &&
+       ccr_response_contains_jd_models "${models_response}" "${models}"; then
+      break
+    fi
+    sleep 1
+  done
+  rm -f -- "${models_tmp}"
+  ccr_response_contains_jd_models "${models_response}" "${models}" ||
+    die 'CCR 运行时模型列表没有包含全部 JD 模型；请检查 CCR provider 状态'
   log "已把 ${#model_names[@]} 个 JD 模型追加到默认 Codex/CCR 模型列表"
 }
 

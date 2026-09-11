@@ -36,6 +36,7 @@ VOLCANO_MODELS='[]'
 BAILIAN_MODELS='[]'
 BLACKAI_GPT_MODELS='[]'
 BLACKAI_CLAUDE_MODELS='[]'
+JD_MODELS='[]'
 TEMP_DIR=""
 readonly -a GATEWAY_KEY_NAMES=(
   VOLCANO_AI_GATEWAY_API_KEY
@@ -496,6 +497,30 @@ load_persisted_gateway_keys() {
   done
   export "${GATEWAY_KEY_NAMES[@]}"
   log "Loaded existing gateway keys from ${CODEX_ENV_FILE}"
+}
+
+load_persisted_jd_gateway() {
+  local current=${JD_GATEWAY_TOKEN:-}
+  if [[ -z "${current}" && -r "${AGENT_ENV_FILE}" ]]; then
+    current=$(/usr/bin/env -u JD_GATEWAY_TOKEN /usr/bin/bash --noprofile --norc -c \
+      'source "$1" >/dev/null 2>&1; printf "%s" "${JD_GATEWAY_TOKEN:-}"' \
+      bash "${AGENT_ENV_FILE}")
+  fi
+  if [[ -n "${current}" ]]; then
+    JD_GATEWAY_TOKEN=${current}
+    export JD_GATEWAY_TOKEN
+  fi
+
+  local jd_catalog="${CODEX_MODEL_CATALOG_DIR}/jd.json"
+  if [[ -n "${JD_GATEWAY_TOKEN:-}" && -r "${jd_catalog}" ]]; then
+    JD_MODELS=$(jq -c '[.models[]?.slug | select(type == "string" and length > 0)] | unique' \
+      "${jd_catalog}" 2>/dev/null || printf '[]')
+    if (( $(jq 'length' <<<"${JD_MODELS}") > 0 )); then
+      log "Loaded existing JD gateway token and $(jq 'length' <<<"${JD_MODELS}") model(s)"
+    else
+      JD_MODELS='[]'
+    fi
+  fi
 }
 
 # Node.js runtime and CLI installation.
@@ -1396,6 +1421,8 @@ build_ccr_config() {
   local blackai_claude_models=${14:-'[]'}
   local blackai_gpt_key=${15:-}
   local blackai_gpt_models=${16:-'[]'}
+  local jd_key=${17:-}
+  local jd_models=${18:-'[]'}
 
   jq \
     --arg local_key "${local_key}" \
@@ -1413,6 +1440,8 @@ build_ccr_config() {
     --argjson blackai_claude_models "${blackai_claude_models}" \
     --arg blackai_gpt_key "${blackai_gpt_key}" \
     --argjson blackai_gpt_models "${blackai_gpt_models}" \
+    --arg jd_key "${jd_key}" \
+    --argjson jd_models "${jd_models}" \
     --arg claude_settings_file "${CLAUDE_SETTINGS_FILE}" \
     --arg codex_home "${CODEX_DIR}" \
     '.value as $cfg
@@ -1427,6 +1456,11 @@ build_ccr_config() {
      | (if $blackai_claude_key != "" then $blackai_claude_key else $old_blackai_claude end) as $blackai_claude
      | (if $blackai_gpt_key != "" then $blackai_gpt_key else $old_blackai_gpt end) as $blackai_gpt
      | ($cfg // {})
+     | if ($jd_key != "" and ($jd_models | length) > 0) then
+         .Providers = [.Providers[]? | select(
+           .id != "jd" and .name != "京东网关" and .name != "JD LLM Gateway"
+         )]
+       else . end
      | .profile = (.profile // {})
      | .profile.profiles = (.profile.profiles // [])
      | .APIKEY = $local_key
@@ -1472,7 +1506,13 @@ build_ccr_config() {
            baseUrl:"https://www.blackaicoding.com/v1",
            apiKey:$blackai_claude, type:"openai_chat_completions",
            models:$blackai_claude_models
-         },{
+         },
+         (if ($jd_key != "" and ($jd_models | length) > 0) then {
+           id:"jd", name:"京东网关", enabled:true,
+           baseUrl:"http://llm-gw.jd.local/v1",
+           apiKey:$jd_key, type:"openai_responses",
+           models:$jd_models
+         } else empty end),{
            id:"zhipu", name:"蓝区智谱", enabled:false,
            baseUrl:"https://open.bigmodel.cn/api/paas/v4",
            apiKey:$old_zhipu, type:"openai_chat_completions",
@@ -1550,7 +1590,9 @@ configure_ccr() {
     "${BLACKAICODING_CLAUDE_API_KEY:-}" \
     "${BLACKAI_CLAUDE_MODELS}" \
     "${BLACKAICODING_GPT_API_KEY:-}" \
-    "${BLACKAI_GPT_MODELS}")
+    "${BLACKAI_GPT_MODELS}" \
+    "${JD_GATEWAY_TOKEN:-}" \
+    "${JD_MODELS}")
   save_ccr_config "${config}"
 
   restart_ccr_gateway
@@ -1635,6 +1677,16 @@ configure_gateway_keys() {
   export "${GATEWAY_KEY_NAMES[@]}"
 }
 
+ccr_models_include_provider_catalog() {
+  local response=$1
+  local provider_name=$2
+  local models=$3
+  jq -e --arg provider "${provider_name}" --argjson expected "${models}" '
+    [.data[]? | if type == "object" then .id elif type == "string" then . else empty end] as $actual
+    | all($expected[]; . as $model | ($actual | index($provider + "/" + $model)) != null)
+  ' <<<"${response}" >/dev/null 2>&1
+}
+
 verify_setup() {
   if ((DRY_RUN)); then
     log "Would validate CLI versions, Codex profiles, Claude JSON, and CCR state"
@@ -1693,6 +1745,19 @@ verify_setup() {
     die "CCR gateway rejected the client key at ${gateway_url}/v1/models (HTTP ${models_http:-none}). Response: $(head -c 500 <<<"${models_response:-<empty body>}")"
   jq -e '.data | type == "array" and length > 0' <<<"${models_response}" >/dev/null ||
     die "CCR model discovery returned no models. Response: $(head -c 500 <<<"${models_response}")"
+
+  local provider_name provider_models
+  while IFS=$'\t' read -r provider_name provider_models; do
+    [[ "${provider_models}" != '[]' ]] || continue
+    ccr_models_include_provider_catalog "${models_response}" "${provider_name}" "${provider_models}" ||
+      die "CCR runtime model list is missing one or more configured ${provider_name} models. Re-run the matching gateway setup script."
+  done <<EOF
+火山AI网关	${VOLCANO_MODELS}
+蓝区百炼	${BAILIAN_MODELS}
+BlackAI GPT	${BLACKAI_GPT_MODELS}
+BlackAI Claude	${BLACKAI_CLAUDE_MODELS}
+京东网关	${JD_MODELS}
+EOF
   log "CCR gateway state: ${state}; model discovery: ok"
 }
 
@@ -1735,13 +1800,15 @@ require_configuration_dependencies() {
 
 configure_gateways_phase() {
   load_persisted_gateway_keys
+  load_persisted_jd_gateway
   configure_gateway_keys
   write_codex_environment
   discover_configured_models
   if (( ! DRY_RUN )) && [[ "${VOLCANO_MODELS}" == "[]" && \
         "${BAILIAN_MODELS}" == "[]" && \
         "${BLACKAI_GPT_MODELS}" == "[]" && \
-        "${BLACKAI_CLAUDE_MODELS}" == "[]" ]]; then
+        "${BLACKAI_CLAUDE_MODELS}" == "[]" && \
+        "${JD_MODELS}" == "[]" ]]; then
     die 'No gateway returned a usable model list; refusing to overwrite the working client/CCR configuration.'
   fi
   write_codex_profiles
