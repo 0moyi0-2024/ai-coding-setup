@@ -136,7 +136,7 @@ if (($#)); then
   exit 2
 fi
 
-TEST_ROOT=$(mktemp -d "${TEST_DIR}/.ai-setup-test.XXXXXXXX")
+TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/ai-setup-test.XXXXXXXX")
 TEST_COUNT=0
 readonly TEST_CODEX_BIN="${TEST_ROOT}/fake-codex"
 
@@ -492,11 +492,25 @@ test_claude_settings_builder() {
   assert_json "${settings}" '.env.ANTHROPIC_DEFAULT_HAIKU_MODEL == null' "remove forced Haiku default"
   assert_json "${settings}" '.permissions.defaultMode == "bypassPermissions"' \
     "configure Claude continuous execution mode"
-  assert_json "${settings}" '.modelOverrides["claude-fable-5"] == "火山AI网关/deepseek-v4-flash"' "set Fable model override"
+  assert_json "${settings}" '.env.ANTHROPIC_MODEL == "claude-sonnet-4-6"' "set Claude default model"
+  assert_json "${settings}" '.modelOverrides["claude-fable-5"] == "deepseek-v4-flash"' "set Fable model override"
   assert_json "${settings}" '.modelOverrides["claude-haiku-4-5-20251001"] == null' "remove obsolete Haiku override"
   assert_json "${settings}" '.modelOverrides["keep-model"] == "keep"' "preserve unrelated model override"
-  assert_json "${settings}" '.modelOverrides["claude-opus-4-6"] == "火山AI网关/deepseek-v4-pro"' "set model override"
+  assert_json "${settings}" '.modelOverrides["claude-opus-4-6"] == "deepseek-v4-pro"' "set model override"
   pass "Claude settings rendering"
+}
+
+test_claude_settings_apikeyhelper_precedence() {
+  local settings
+  settings=$(build_claude_settings \
+    '{"apiKeyHelper":"/usr/local/bin/claude-key","env":{"ANTHROPIC_AUTH_TOKEN":"stale"}}' \
+    'local-test-key' \
+    'http://127.0.0.1:4567' \
+    'deepseek-v4-flash' \
+    'deepseek-v4-pro')
+  assert_json "${settings}" '.apiKeyHelper == "/usr/local/bin/claude-key"' "preserve Claude apiKeyHelper"
+  assert_json "${settings}" '.env.ANTHROPIC_AUTH_TOKEN == null' "avoid Claude apiKeyHelper and static token conflict"
+  pass "Claude apiKeyHelper auth precedence"
 }
 
 test_ccr_config_builder() {
@@ -528,7 +542,9 @@ test_ccr_config_builder() {
   assert_json "${config}" '[.Providers[] | select(.id == "blackai-claude" and .apiKey == "new-blackai-claude")][0].models == ["claude-sonnet-4-6","claude-fable-5"]' "use discovered BlackAI Claude models"
   assert_json "${config}" '[.Providers[] | select(.id == "blackai-gpt" and .apiKey == "new-blackai-gpt" and .type == "openai_responses")][0].models == ["gpt-5.6-sol","gpt-5.6-terra"]' "use discovered BlackAI GPT models"
   assert_json "${config}" '.preferredProvider == "火山AI网关" and .defaultOpenAIModel == "deepseek-v4-flash"' "keep Volcano as the CCR default"
-  assert_json "${config}" '.profile.profiles[] | select(.agent == "claude-code") | .opusModel == "火山AI网关/deepseek-v4-pro"' "update Claude profile"
+  assert_json "${config}" '.virtualModelProfiles[] | select(.key == "claude-sonnet-volcano" and .displayName == "Claude Sonnet (Volcano)") | .match.exactAliases == ["claude-sonnet-4-6"] and .baseModel.fixedModel == "deepseek-v4-flash"' "map Claude Sonnet aliases to a valid Volcano virtual model"
+  assert_json "${config}" '.virtualModelProfiles[] | select(.key == "claude-opus-volcano" and .displayName == "Claude Opus (Volcano)") | .match.exactAliases == ["claude-opus-4-6"] and .baseModel.fixedModel == "deepseek-v4-pro"' "map Claude Opus aliases to a valid Volcano virtual model"
+  assert_json "${config}" '.profile.profiles[] | select(.agent == "claude-code") | .opusModel == "deepseek-v4-pro"' "update Claude profile"
   pass "CCR configuration keeps the default route separate from Codex catalogs"
 }
 
@@ -666,8 +682,13 @@ test_rolling_port_selection() {
   pass "rolling CCR port selection"
 }
 
+
+reset_process_umask_for_permission_tests() {
+  umask 0022
+}
 test_agent_layout() {
   local loaded_jd_token
+  reset_process_umask_for_permission_tests
   mkdir -p "${AGENT_DIR}"
   printf '%s\n' keep >"${AGENT_DIR}/user-file"
   JD_GATEWAY_TOKEN='existing jd token'
@@ -1242,6 +1263,7 @@ test_model_discovery_failures
 test_volcano_model_probe
 test_volcano_probe_failure
 test_claude_settings_builder
+test_claude_settings_apikeyhelper_precedence
 test_ccr_config_builder
 test_ccr_config_from_empty_state
 test_ccr_config_idempotence

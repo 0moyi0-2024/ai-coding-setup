@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME=${0##*/}
-readonly AGENT_DIR="${AI_SETUP_AGENT_DIR:-/agent}"
+readonly AGENT_DIR="${AI_SETUP_AGENT_DIR:-/mnt/d/agent}"
 readonly AGENT_BIN_DIR="${AGENT_DIR}/bin"
 readonly AGENT_CACHE_DIR="${AGENT_DIR}/cache"
 readonly AGENT_CONFIG_DIR="${AGENT_DIR}/config"
@@ -111,11 +111,12 @@ write_secure_file() {
   directory=$(dirname "${file}")
   mkdir -p "${directory}"
   temporary_file=$(mktemp "${directory}/.$(basename "${file}").tmp.XXXXXXXX")
+  chmod 600 "${temporary_file}"
   if ! printf '%s\n' "${content}" >"${temporary_file}"; then
     rm -f -- "${temporary_file}"
     die "Could not write temporary file for ${file}."
   fi
-  chmod "${mode}" "${temporary_file}"
+  chmod -- "${mode}" "${temporary_file}"
   if ! mv -f -- "${temporary_file}" "${file}"; then
     rm -f -- "${temporary_file}"
     die "Could not replace ${file}."
@@ -333,6 +334,12 @@ WantedBy=multi-user.target" 644
       return 0
     fi
     log "Installed and enabled systemd unit ${unit_file}"
+    return 0
+  fi
+
+  local user_runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  if [[ ! -S "${user_runtime_dir}/bus" ]]; then
+    log 'User systemd bus is unavailable; CCR auto-start is not installed.'
     return 0
   fi
 
@@ -1504,22 +1511,45 @@ build_ccr_config() {
            } else empty end)
          ]
        )
+     | .virtualModelProfiles = (
+         [.virtualModelProfiles[]? | select(.id != "claude-sonnet-volcano" and .id != "claude-opus-volcano")]
+         + [
+           (if $volcano_fast_model != "" then {
+             id:"claude-sonnet-volcano",
+             key:"claude-sonnet-volcano",
+             displayName:"Claude Sonnet (Volcano)",
+             enabled:true,
+             match:{exactAliases:["claude-sonnet-4-6"]},
+             baseModel:{fixedModel:$volcano_fast_model},
+             materialization:{enabled:true}
+           } else empty end),
+           (if $volcano_pro_model != "" then {
+             id:"claude-opus-volcano",
+             key:"claude-opus-volcano",
+             displayName:"Claude Opus (Volcano)",
+             enabled:true,
+             match:{exactAliases:["claude-opus-4-6"]},
+             baseModel:{fixedModel:$volcano_pro_model},
+             materialization:{enabled:true}
+           } else empty end)
+         ]
+       )
      | if $volcano_fast_model != "" then
          .preferredProvider = "火山AI网关"
          | .defaultOpenAIModel = $volcano_fast_model
-         | .profile.claudeCode.model = ("火山AI网关/" + $volcano_fast_model)
+         | .profile.claudeCode.model = $volcano_fast_model
          | .profile.claudeCode.settingsFile = $claude_settings_file
-         | .profile.claudeCode.haikuModel = ("火山AI网关/" + $volcano_fast_model)
-         | .profile.claudeCode.sonnetModel = ("火山AI网关/" + $volcano_fast_model)
-         | .profile.claudeCode.opusModel = ("火山AI网关/" + $volcano_pro_model)
+         | .profile.claudeCode.haikuModel = $volcano_fast_model
+         | .profile.claudeCode.sonnetModel = $volcano_fast_model
+         | .profile.claudeCode.opusModel = $volcano_pro_model
        else . end
      | .profile.profiles |= map(
          if .agent == "claude-code" and $volcano_fast_model != "" then
-           .model = ("火山AI网关/" + $volcano_fast_model)
+           .model = $volcano_fast_model
            | .settingsFile = $claude_settings_file
-           | .haikuModel = ("火山AI网关/" + $volcano_fast_model)
-           | .sonnetModel = ("火山AI网关/" + $volcano_fast_model)
-           | .opusModel = ("火山AI网关/" + $volcano_pro_model)
+           | .haikuModel = $volcano_fast_model
+           | .sonnetModel = $volcano_fast_model
+           | .opusModel = $volcano_pro_model
          elif .agent == "codex" then
            .codexHome = $codex_home
          else . end
@@ -1604,25 +1634,29 @@ build_claude_settings() {
           .CODEXL_CLAUDE_CODE_MODEL
         )
       + {
-          ANTHROPIC_AUTH_TOKEN:$key,
           ANTHROPIC_BASE_URL:$gateway_url,
           ANTHROPIC_API_BASE_URL:$gateway_url,
           CLAUDE_AGENT_API_BASE_URL:$gateway_url,
           ANTHROPIC_MODEL:"claude-sonnet-4-6",
           ANTHROPIC_DEFAULT_SONNET_MODEL:"claude-sonnet-4-6",
           ANTHROPIC_DEFAULT_OPUS_MODEL:"claude-opus-4-6",
-          CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:"1"
+          CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:"0"
         })
+    | if (.apiKeyHelper // "") != "" then
+        .env |= del(.ANTHROPIC_AUTH_TOKEN)
+      else
+        .env.ANTHROPIC_AUTH_TOKEN = $key
+      end
     | .model = "sonnet"
     | .permissions = ((.permissions // {}) + {defaultMode:"bypassPermissions"})
     | if $volcano_fast_model != "" then
         .modelOverrides = (((.modelOverrides // {})
           | del(.["claude-haiku-4-5-20251001"]))
           + {
-              "claude-sonnet-4-6":("火山AI网关/" + $volcano_fast_model),
-              "claude-opus-4-6":("火山AI网关/" + $volcano_pro_model),
-              "claude-opus-4-7":("火山AI网关/" + $volcano_pro_model),
-              "claude-fable-5":("火山AI网关/" + $volcano_fast_model)
+              "claude-sonnet-4-6":$volcano_fast_model,
+              "claude-opus-4-6":$volcano_pro_model,
+              "claude-opus-4-7":$volcano_pro_model,
+              "claude-fable-5":$volcano_fast_model
             })
       else . end' <<<"${settings}"
 }
@@ -1768,8 +1802,8 @@ parse_args() {
 }
 
 require_configuration_dependencies() {
+  require_command jq
   if ((CONFIGURE_GATEWAYS && !DRY_RUN)); then
-    require_command jq
     require_command curl
     require_command openssl
   fi
