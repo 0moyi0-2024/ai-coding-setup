@@ -228,11 +228,13 @@ JD 常用可选参数：
 systemctl status ai-coding-setup-ccr.service
 ```
 
-没有 systemd 的容器不会安装服务，需要由容器入口、Supervisor 或其他进程管理器执行：
+没有 systemd 的容器不会安装系统服务。脚本会在 `env.sh` 中写入兜底恢复逻辑：容器重启后打开新的 Bash 终端时，如果检测到没有 systemd user bus 且 CCR 尚未运行，会自动在后台启动：
 
 ```bash
 /agent/bin/ccr-autostart
 ```
+
+因此无 systemd 容器重启后，打开终端即可快速恢复 CCR；需要容器一启动就恢复，仍应由容器入口、Supervisor 或其他进程管理器执行上面的命令。
 
 ## 常见问题
 
@@ -253,6 +255,10 @@ bash ./set_claude_provider_keys.sh
 ```
 
 脚本只有在 `claude --version` 和 `codex --version` 都成功后才进入配置阶段。
+
+### 更新时报 `npm error EACCES ... rename`
+
+Windows/WSL（NTFS）不允许重命名正在运行的程序目录。更新前请先退出正在运行的 Claude Code 和 Codex 会话；CCR 会由脚本自动停止并在配置完成后恢复。
 
 ### 普通 Codex 显示了其他网关或带中文前缀的旧模型
 

@@ -238,6 +238,9 @@ write_runtime_files() {
   # The format string treats %% as a literal %, so restore the Bash longest-prefix
   # expansion after printf renders the template.
   env_content=${env_content//'${ai_setup_rest%:*}'/'${ai_setup_rest%%:*}'}
+  printf -v ccr_startup_hook '\n# BEGIN ai-coding-setup CCR autostart\nif [[ ! -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus" ]]; then\n  pgrep -f %q >/dev/null 2>&1 || nohup %q >/dev/null 2>&1 &\nfi\n# END ai-coding-setup CCR autostart' \
+    "${CCR_AUTOSTART_HELPER}" "${CCR_AUTOSTART_HELPER}"
+  env_content+="${ccr_startup_hook}"
   # JD is stored directly here when configured, so restrict the file when it contains that token.
   write_secure_file "${AGENT_ENV_FILE}" "${env_content}" "${env_mode}"
   if (( ! DRY_RUN )) && [[ -n "${jd_token}" && -f "${LEGACY_CODEX_JD_ENV_FILE}" ]]; then
@@ -831,6 +834,18 @@ validate_tools_installation() {
   log "Installed Claude Code Router ${ccr_version}"
 }
 
+require_no_running_tools() {
+  local pattern
+  command_exists pgrep || return 0
+  for pattern in \
+    "${NODE_INSTALL_DIR}/lib/node_modules/@anthropic-ai/claude-code" \
+    "${NODE_INSTALL_DIR}/lib/node_modules/@openai/codex"; do
+    if pgrep -f "${pattern}" >/dev/null 2>&1; then
+      die "Claude Code or Codex is running from ${NODE_INSTALL_DIR}; close those sessions before updating the tools."
+    fi
+  done
+}
+
 install_latest_tools() {
   if ((DRY_RUN)); then
     log "Would install the tools directly in ${NODE_INSTALL_DIR}"
@@ -846,11 +861,14 @@ install_latest_tools() {
   install_node_runtime
   ensure_node_runtime_dependencies "${NODE_INSTALL_DIR}/bin/node"
   require_supported_node_version "${NODE_INSTALL_DIR}/bin/node"
+  require_no_running_tools
+  stop_ccr_autostart_unit
   local pid
   pid=$(service_pid)
   if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
     stop_ccr_service
   fi
+  wait_for_ccr_processes_stopped
   install_cli_packages ||
     die "Claude Code or Codex installation is incomplete; gateway configuration was not changed."
   ccr_package=$(ccr_package_dir "${NODE_INSTALL_DIR}")
@@ -1331,6 +1349,33 @@ wait_for_ccr_service() {
     sleep 1
   done
   die "CCR management service did not become ready within 30s (missing or incomplete ${CCR_SERVICE_FILE}). Check: systemctl status ${CCR_SYSTEMD_UNIT} and journalctl -u ${CCR_SYSTEMD_UNIT} --no-pager | tail -50"
+}
+
+stop_ccr_autostart_unit() {
+  local user_runtime_dir
+  command_exists systemctl || return 0
+  if ((EUID == 0)); then
+    systemctl stop "${CCR_SYSTEMD_UNIT}" >/dev/null 2>&1 || true
+  elif [[ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus" ]] &&
+       systemctl --user is-active "${CCR_SYSTEMD_UNIT}" >/dev/null 2>&1; then
+    systemctl --user stop "${CCR_SYSTEMD_UNIT}" >/dev/null 2>&1 || true
+  fi
+}
+
+wait_for_ccr_processes_stopped() {
+  local attempt current_pid
+  command_exists pgrep || return 0
+  current_pid=$$
+  for ((attempt=1; attempt<=20; attempt+=1)); do
+    if ! pgrep -f "${NODE_INSTALL_DIR}/lib/node_modules/@musistudio/claude-code-router" |
+         grep -vqx "${current_pid}" &&
+       ! pgrep -f "${CCR_AUTOSTART_HELPER}" |
+         grep -vqx "${current_pid}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  die "CCR or its autostart helper is still running; cannot update the tool installation safely."
 }
 
 stop_ccr_service() {

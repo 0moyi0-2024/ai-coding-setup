@@ -702,6 +702,10 @@ test_agent_layout() {
   [[ -f "${AGENT_ENV_FILE}" ]] || fail "agent environment file"
   grep -Fq 'export JD_GATEWAY_TOKEN=' "${AGENT_ENV_FILE}" ||
     fail "agent environment does not preserve the JD token"
+  grep -Fq 'BEGIN ai-coding-setup CCR autostart' "${AGENT_ENV_FILE}" ||
+    fail "agent environment does not install the CCR recovery hook"
+  grep -Fq 'nohup' "${AGENT_ENV_FILE}" ||
+    fail "agent environment recovery hook does not launch ccr-autostart"
   assert_file_mode 600 "${AGENT_ENV_FILE}" "agent environment with JD token"
   loaded_jd_token=$(env -u JD_GATEWAY_TOKEN bash --noprofile --norc -c \
     'source "$1"; printf "%s" "$JD_GATEWAY_TOKEN"' bash "${AGENT_ENV_FILE}")

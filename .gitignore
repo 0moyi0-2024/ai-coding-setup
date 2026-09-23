@@ -22,3 +22,6 @@ test/.ai-setup-test.*
 # 系统文件
 Thumbs.db
 .DS_Store
+
+# 本地运行时目录
+/agent/
