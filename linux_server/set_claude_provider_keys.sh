@@ -31,7 +31,7 @@ readonly CCR_RUNTIME_FILE="${CCR_DIR}/runtime.env"
 readonly CCR_SYSTEMD_UNIT="ai-coding-setup-ccr.service"
 readonly CCR_AUTOSTART_HELPER="${AGENT_BIN_DIR}/ccr-autostart"
 readonly CCR_PORT_SCAN_START="${AI_SETUP_CCR_PORT_SCAN_START:-3456}"
-readonly VOLCANO_MODEL_CANDIDATES='["deepseek-v4-flash","deepseek-v4-pro","qwen3.7-plus","qwen3.7-max","qwen3.8-flash","doubao-seed-2.1-pro","MiniMax-M3","glm-5.2","glm-5.3","glm-5.3-flash","hy3","kimi-k2.7-code"]'
+readonly VOLCANO_MODEL_CANDIDATES='["deepseek-v4.1-flash","volcengine/deepseek-v4.1-flash","deepseek-v4-flash","deepseek-v4-pro","qwen3.7-plus","qwen3.7-max","qwen3.8-flash","qwen3.8-max","doubao-seed-2.1-pro","MiniMax-M3","glm-5.2","glm-5.3","glm-5.3-flash","zhipu/glm-5.3","hy3","kimi-k2.7-code","kimi-k3","tencent/kimi-k3"]'
 VOLCANO_MODELS='[]'
 BAILIAN_MODELS='[]'
 BLACKAI_GPT_MODELS='[]'
@@ -1043,10 +1043,10 @@ augment_codex_model_catalog() {
              apply_patch_tool_type:"freeform",
              web_search_tool_type:"text_and_image",
              context_window:(if ($slug | startswith("claude-")) then 200000
-                             elif ($slug | test("^(deepseek|qwen)")) then 1000000
+                             elif ($slug | test("(^|/)(deepseek|qwen)")) then 1000000
                              else 128000 end),
              max_context_window:(if ($slug | startswith("claude-")) then 200000
-                                 elif ($slug | test("^(deepseek|qwen)")) then 1000000
+                                 elif ($slug | test("(^|/)(deepseek|qwen)")) then 1000000
                                  else 128000 end),
              effective_context_window_percent:95,
              experimental_supported_tools:[],
@@ -1098,8 +1098,8 @@ codex_profile() {
       # Preferred priority is encoded by the order of the alternatives below;
       # keep this in sync with `codex_model_compatibility_mode`.
       model=$(select_profile_model "${models}" \
-        'deepseek-v4-flash' 'deepseek-v4-pro' 'doubao-seed-2.1-pro' \
-        'glm-5.2' 'qwen3.7-max' 'qwen3.7-plus')
+        'deepseek-v4.1-flash' 'deepseek-v4-flash' 'deepseek-v4-pro' \
+        'doubao-seed-2.1-pro' 'glm-5.2' 'qwen3.7-max' 'qwen3.7-plus')
       note='# Direct Volcano Responses access does not support Codex tool items or token-accurate context windows.'
       ;;
     bailian)
@@ -1626,7 +1626,7 @@ configure_ccr() {
   config_response=$(fetch_ccr_config)
   local_key=$(resolve_ccr_local_key "${config_response}")
   volcano_fast_model=$(select_profile_model "${VOLCANO_MODELS}" \
-    deepseek-v4-flash deepseek-v4-pro)
+    deepseek-v4.1-flash deepseek-v4-flash deepseek-v4-pro)
   [[ -n "${volcano_fast_model}" ]] ||
     die 'Volcano must have at least one verified model because it is the default CCR and Claude gateway.'
   volcano_pro_model=$(select_profile_model "${VOLCANO_MODELS}" \
@@ -1693,7 +1693,7 @@ build_claude_settings() {
         .env.ANTHROPIC_AUTH_TOKEN = $key
       end
     | .model = "sonnet"
-    | .permissions = ((.permissions // {}) + {defaultMode:"bypassPermissions"})
+    | .permissions = ((.permissions // {}) + {defaultMode:"acceptEdits"})
     | if $volcano_fast_model != "" then
         .modelOverrides = (((.modelOverrides // {})
           | del(.["claude-haiku-4-5-20251001"]))
@@ -1813,7 +1813,7 @@ verify_setup() {
     die "CCR model discovery returned no models. Response: $(head -c 500 <<<"${models_response}")"
 
   local default_model
-  default_model=$(select_profile_model "${VOLCANO_MODELS}" deepseek-v4-flash deepseek-v4-pro)
+  default_model=$(select_profile_model "${VOLCANO_MODELS}" deepseek-v4.1-flash deepseek-v4-flash deepseek-v4-pro)
   probe_ccr_default_model "${gateway_url}" "${local_key}" "${default_model}"
   log "CCR gateway state: ${state}; model discovery and default route: ok"
 }

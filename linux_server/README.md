@@ -5,10 +5,10 @@
 - `set_claude_provider_keys.sh`：基础安装。安装或更新 Claude Code、Codex、Claude Code Router（CCR），并配置火山、百炼、BlackAI GPT、BlackAI Claude/Grok。
 - `set_jd_gateway_config.sh`：JD 内网附加配置。在基础安装之上增加 JD，不覆盖已有网关，并把普通 Codex 的默认网关切到 JD。
 
-所有运行文件默认放在 `/agent`：
+所有运行文件默认放在 `/mnt/d/agent`：
 
 ```text
-/agent/
+/mnt/d/agent/
 ├── bin/                    # claude、codex、ccr、claude-jd 启动器
 ├── node/                   # Node.js 和 npm 全局包
 ├── config/claude/          # Claude Code 主配置
@@ -52,7 +52,7 @@ bash ./set_claude_provider_keys.sh
 安装完成后，在当前 shell 加载环境：
 
 ```bash
-source /agent/env.sh
+source /mnt/d/agent/env.sh
 hash -r
 ```
 
@@ -64,7 +64,7 @@ command -v codex
 command -v ccr
 ```
 
-正常情况下均指向 `/agent/bin/`。
+正常情况下均指向 `/mnt/d/agent/bin/`。
 
 需要用 root 安装、但之后由普通用户运行时，请指定实际用户：
 
@@ -118,7 +118,7 @@ JD 脚本用于可访问 `llm-gw.jd.local` 的内网机器。先完成基础安�
 
 ```bash
 bash ./set_jd_gateway_config.sh
-source /agent/env.sh
+source /mnt/d/agent/env.sh
 ```
 
 它会：
@@ -126,9 +126,9 @@ source /agent/env.sh
 1. 隐藏读取 JD token；已有 token 时直接回车可保留。
 2. 从 JD 的 Claude 和 Codex `/models` 端点发现模型。
 3. 将接口返回结果与内置候选合并，并逐个发送实际请求验证。
-4. 只把验证成功的模型写入 `/agent/config/codex/catalogs/jd.json` 和 `jd.config.toml`。
-5. 生成 `/agent/bin/claude-jd`。
-6. 把 `JD_GATEWAY_TOKEN` 追加到 `/agent/env.sh`，不改动已有网关变量。
+4. 只把验证成功的模型写入 `/mnt/d/agent/config/codex/catalogs/jd.json` 和 `jd.config.toml`。
+5. 生成 `/mnt/d/agent/bin/claude-jd`。
+6. 把 `JD_GATEWAY_TOKEN` 追加到 `/mnt/d/agent/env.sh`，不改动已有网关变量。
 7. 把 JD provider 追加或更新到 CCR，同时保持 CCR 和普通 `claude` 默认路由到火山。
 8. 把普通 `codex` 的默认 provider 和模型目录切到 JD；已有火山、百炼和 BlackAI profile 继续保留。
 
@@ -160,7 +160,7 @@ claude
 
 ```bash
 bash ./set_jd_gateway_config.sh
-source /agent/env.sh
+source /mnt/d/agent/env.sh
 ```
 
 自动化场景可以显式传入 token：
@@ -184,7 +184,7 @@ sandbox_mode = "danger-full-access"
 
 ```bash
 bash ./set_claude_provider_keys.sh --configure-only
-source /agent/env.sh
+source /mnt/d/agent/env.sh
 ```
 
 只安装或更新 CLI，不修改网关配置：
@@ -210,6 +210,8 @@ JD 常用可选参数：
 --dry-run             仅显示计划
 --output-dir <dir>    输出到指定目录，适合隔离测试
 --standalone          生成独立配置文件
+--merge               追加 JD 配置（默认）：写入 .codex/jd.config.toml
+--inline-token        Codex 配置用 http_headers 内联 token（默认用 env_key 更安全）
 ```
 
 日常追加或更新 JD 时不需要额外参数。
@@ -219,7 +221,7 @@ JD 常用可选参数：
 基础脚本会动态选择连续三个空闲端口，并写入：
 
 ```text
-/agent/home/.claude-code-router/runtime.env
+/mnt/d/agent/home/.claude-code-router/runtime.env
 ```
 
 如果 PID 1 是 systemd，脚本会安装并启用 `ai-coding-setup-ccr.service`，机器重启后自动恢复 CCR。查看状态：
@@ -231,7 +233,7 @@ systemctl status ai-coding-setup-ccr.service
 没有 systemd 的容器不会安装系统服务。脚本会在 `env.sh` 中写入兜底恢复逻辑：容器重启后打开新的 Bash 终端时，如果检测到没有 systemd user bus 且 CCR 尚未运行，会自动在后台启动：
 
 ```bash
-/agent/bin/ccr-autostart
+/mnt/d/agent/bin/ccr-autostart
 ```
 
 因此无 systemd 容器重启后，打开终端即可快速恢复 CCR；需要容器一启动就恢复，仍应由容器入口、Supervisor 或其他进程管理器执行上面的命令。
@@ -241,7 +243,7 @@ systemctl status ai-coding-setup-ccr.service
 ### 找不到命令
 
 ```bash
-source /agent/env.sh
+source /mnt/d/agent/env.sh
 hash -r
 command -v codex
 ```
@@ -266,7 +268,7 @@ Windows/WSL（NTFS）不允许重命名正在运行的程序目录。更新前�
 
 ```bash
 bash ./set_claude_provider_keys.sh --configure-only
-source /agent/env.sh
+source /mnt/d/agent/env.sh
 ```
 
 已安装 JD 且 JD token、profile 和 catalog 都有效时，基础脚本重跑会保留普通 `codex` 默认使用 JD。需要刷新 JD 模型时重新运行 JD 脚本。其他网关继续使用对应 `--profile`。
@@ -277,7 +279,7 @@ source /agent/env.sh
 
 ```bash
 bash ./set_jd_gateway_config.sh
-source /agent/env.sh
+source /mnt/d/agent/env.sh
 ```
 
 ### CCR 没有注册 JD
@@ -285,7 +287,7 @@ source /agent/env.sh
 确认基础安装已完成并且 CCR 能启动，再重新执行 JD 脚本：
 
 ```bash
-source /agent/env.sh
+source /mnt/d/agent/env.sh
 ccr status
 bash ./set_jd_gateway_config.sh
 ```
@@ -309,12 +311,12 @@ bash ./test/set_claude_provider_keys_test.sh --installed-codex
 
 ## 安全和清理
 
-基础四网关 token 保存在 `/agent/config/codex/gateways.env`，JD token 保存在 `/agent/env.sh`；相关文件权限为 600。不要把 token 输出到日志或提交到仓库。
+基础四网关 token 保存在 `/mnt/d/agent/config/codex/gateways.env`，JD token 保存在 `/mnt/d/agent/env.sh`；相关文件权限为 600。不要把 token 输出到日志或提交到仓库。
 
-确认 `/agent` 是本脚本创建的专用目录后，可删除当前容器中的安装：
+确认 `/mnt/d/agent` 是本脚本创建的专用目录后，可删除当前容器中的安装：
 
 ```bash
-source /agent/env.sh
+source /mnt/d/agent/env.sh
 ccr stop || true
-rm -rf -- /agent
+rm -rf -- /mnt/d/agent
 ```

@@ -165,7 +165,7 @@ TOML
   runtime_settings=$(sed -n '2p' <<<"${launcher_output}")
   [[ "$(sed -n '1p' <<<"${launcher_output}")" == '--settings' &&
      "$(sed -n '3p' <<<"${launcher_output}")" == '--permission-mode' &&
-     "$(sed -n '4p' <<<"${launcher_output}")" == 'bypassPermissions' &&
+     "$(sed -n '4p' <<<"${launcher_output}")" == 'acceptEdits' &&
      "$(sed -n '5p' <<<"${launcher_output}")" == 'marker' ]] ||
     fail 'claude-jd did not pass the JD runtime settings and permission mode'
   jq -e '
@@ -175,7 +175,7 @@ TOML
     and .modelOverrides["claude-opus-4-8"] == "Claude-Opus-4.8-joybuilder"
     and .modelOverrides["claude-opus-4-7"] == "Claude-Opus-4.7-joybuilder"
     and .modelOverrides["claude-sonnet-5"] == "Claude-Sonnet-5-joybuilder"
-    and .permissions.defaultMode == "bypassPermissions"
+    and .permissions.defaultMode == "acceptEdits"
     and (.env | has("ANTHROPIC_AUTH_TOKEN") | not)
   ' <<<"${runtime_settings}" >/dev/null || fail 'claude-jd runtime settings are invalid'
   [[ "${launcher_output}" != *"${TEST_TOKEN}"* ]] || fail 'claude-jd arguments contain the token'
@@ -379,7 +379,7 @@ FAKE_NODE_CODEX
   launcher_output=$("${agent_dir}/bin/claude-jd" marker)
   [[ "$(sed -n '1p' <<<"${launcher_output}")" == '--settings' &&
      "$(sed -n '3p' <<<"${launcher_output}")" == '--permission-mode' &&
-     "$(sed -n '4p' <<<"${launcher_output}")" == 'bypassPermissions' &&
+     "$(sed -n '4p' <<<"${launcher_output}")" == 'acceptEdits' &&
      "$(sed -n '5p' <<<"${launcher_output}")" == 'marker' ]] ||
     fail 'claude-jd did not load the JD runtime configuration'
   jq -e '.env.ANTHROPIC_BASE_URL == "http://llm-gw.jd.local/anthropic"' \

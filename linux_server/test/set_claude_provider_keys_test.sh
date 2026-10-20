@@ -9,8 +9,8 @@ readonly MANUAL_PATH="$(cd -- "${TEST_DIR}/.." && pwd -P)/README.md"
 readonly REAL_CODEX_BIN="$(command -v codex || true)"
 readonly REAL_CODEX_PATH="${PATH}"
 REAL_NODE_BIN="$(command -v node || true)"
-if [[ -z "${REAL_NODE_BIN}" && -x /agent/node/bin/node ]]; then
-  REAL_NODE_BIN=/agent/node/bin/node
+if [[ -z "${REAL_NODE_BIN}" && -x /mnt/d/agent/node/bin/node ]]; then
+  REAL_NODE_BIN=/mnt/d/agent/node/bin/node
 fi
 readonly REAL_NODE_BIN
 
@@ -50,7 +50,7 @@ installed_profile_env_key() {
 }
 
 run_installed_codex_test() {
-  local installed_agent_dir="${AI_SETUP_AGENT_DIR:-/agent}"
+  local installed_agent_dir="${AI_SETUP_AGENT_DIR:-/mnt/d/agent}"
   local installed_env_file="${installed_agent_dir}/env.sh"
   local installed_codex_dir="${installed_agent_dir}/config/codex"
   local installed_codex_bin="${installed_agent_dir}/bin/codex"
@@ -490,7 +490,7 @@ test_claude_settings_builder() {
   assert_json "${settings}" '.env.ANTHROPIC_AUTH_TOKEN == "local-test-key"' "set local CCR key"
   assert_json "${settings}" '.env.ANTHROPIC_BASE_URL == "http://127.0.0.1:4567"' "set CCR URL"
   assert_json "${settings}" '.env.ANTHROPIC_DEFAULT_HAIKU_MODEL == null' "remove forced Haiku default"
-  assert_json "${settings}" '.permissions.defaultMode == "bypassPermissions"' \
+  assert_json "${settings}" '.permissions.defaultMode == "acceptEdits"' \
     "configure Claude continuous execution mode"
   assert_json "${settings}" '.env.ANTHROPIC_MODEL == "claude-sonnet-4-6"' "set Claude default model"
   assert_json "${settings}" '.modelOverrides["claude-fable-5"] == "deepseek-v4-flash"' "set Fable model override"
@@ -847,7 +847,7 @@ test_operation_manual() {
     fail "manual JD installer command"
   grep -Fq 'bash ./test/set_claude_provider_keys_test.sh' "${MANUAL_PATH}" ||
     fail "manual test command"
-  grep -Fq 'source /agent/env.sh' "${MANUAL_PATH}" || fail "manual environment command"
+  grep -Fq 'source /mnt/d/agent/env.sh' "${MANUAL_PATH}" || fail "manual environment command"
   grep -Fq 'codex --profile volcano' "${MANUAL_PATH}" || fail "manual Volcano profile"
   grep -Fq 'codex --profile bailian' "${MANUAL_PATH}" || fail "manual Bailian profile"
   grep -Fq 'codex --profile blackai-gpt' "${MANUAL_PATH}" || fail "manual BlackAI GPT profile"

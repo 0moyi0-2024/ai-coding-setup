@@ -14,7 +14,7 @@ umask 077
 #
 # 选项:
 #   --token <token>       直接指定 JD 网关 token
-#   --output-dir <dir>    指定配置根目录（默认自动识别 /agent 或 $HOME）
+#   --output-dir <dir>    指定配置根目录（默认自动识别 /mnt/d/agent 或 $HOME）
 #   --standalone          生成独立文件（不写入 ~/.claude ~/.codex，而是输出到 output-dir 下的
 #                         claude-settings.json 和 codex-config.toml，方便手动复制）
 #   --merge               追加 JD 支持（默认；Codex 默认切到 JD，Claude 默认仍走火山）
@@ -22,13 +22,13 @@ umask 077
 #   --codex-only          只生成 Codex 配置
 #   --no-probe            不访问网关，直接使用内置回退模型
 #   --inline-token        Codex 配置使用 http_headers 内联 token（默认使用 env_key 环境变量引用，更安全）
-#   --no-save-token       不把 token 追加到 /agent/env.sh 或用户 shell 配置
+#   --no-save-token       不把 token 追加到 ${AGENT_DIR}/env.sh 或用户 shell 配置
 #   --dry-run             探测模型并显示写入计划，不实际写文件或打印 token
 #   -h, --help            显示帮助
 # ============================================================
 
 SCRIPT_NAME=${0##*/}
-readonly AGENT_DIR="${AI_SETUP_AGENT_DIR:-/agent}"
+readonly AGENT_DIR="${AI_SETUP_AGENT_DIR:-/mnt/d/agent}"
 readonly CCR_DIR="${AGENT_DIR}/home/.claude-code-router"
 readonly CCR_SERVICE_FILE="${CCR_DIR}/service.json"
 readonly CCR_RUNTIME_FILE="${CCR_DIR}/runtime.env"
@@ -89,7 +89,7 @@ usage() {
 
 选项:
   --token <token>       直接指定 JD 网关 token（也可以通过 JD_GATEWAY_TOKEN 环境变量提供）
-  --output-dir <dir>    指定配置根目录（默认自动识别 /agent 或 \$HOME）
+  --output-dir <dir>    指定配置根目录（默认自动识别 /mnt/d/agent 或 \$HOME）
   --standalone          生成独立文件到 output-dir 下（不覆盖 ~/.claude ~/.codex）
   --merge               追加 JD 配置（默认）：写入 .codex/jd.config.toml，为 Claude
                         生成 claude-jd 启动器，并把普通 Codex 默认切到 JD
@@ -97,12 +97,12 @@ usage() {
   --codex-only          只生成 Codex 配置
   --no-probe            不访问网关，直接使用内置回退模型
   --inline-token        Codex 配置使用 http_headers 内联 token（默认 env_key 引用环境变量，更安全）
-  --no-save-token       不把 token 追加到 /agent/env.sh 或用户 shell 配置
+  --no-save-token       不把 token 追加到 ${AGENT_DIR}/env.sh 或用户 shell 配置
   --dry-run             探测模型并显示写入计划，不实际写文件或打印 token
   -h, --help            显示本帮助
 
 环境变量:
-  AI_SETUP_AGENT_DIR    安装根目录（默认 /agent；与主安装脚本一致）
+  AI_SETUP_AGENT_DIR    安装根目录（默认 /mnt/d/agent；与主安装脚本一致）
 
 生成的文件:
   默认/--merge: 追加 JD 环境变量和 claude-jd 启动器 + 写入 \${output_dir}/.codex/jd.config.toml
@@ -573,7 +573,7 @@ build_claude_settings() {
       "model": "opus",
       "fallbackModel": $fallback,
       "modelOverrides": $model_overrides,
-      "permissions": { "deny": [], "defaultMode": "bypassPermissions" },
+      "permissions": { "deny": [], "defaultMode": "acceptEdits" },
       "outputStyle": "Concise",
       "language": "Chinese",
       "promptCacheTtl": "1h",
@@ -825,7 +825,7 @@ write_claude_jd_launcher() {
     env_file=''
   fi
   printf -v content \
-    '#!/usr/bin/env bash\nset -Eeuo pipefail\n%s\n: "${JD_GATEWAY_TOKEN:?JD_GATEWAY_TOKEN 未配置，请重新运行 set_jd_gateway_config.sh}"\nexport ANTHROPIC_AUTH_TOKEN="${JD_GATEWAY_TOKEN}"\nexec %q --settings %q --permission-mode bypassPermissions "$@"' \
+    '#!/usr/bin/env bash\nset -Eeuo pipefail\n%s\n: "${JD_GATEWAY_TOKEN:?JD_GATEWAY_TOKEN 未配置，请重新运行 set_jd_gateway_config.sh}"\nexport ANTHROPIC_AUTH_TOKEN="${JD_GATEWAY_TOKEN}"\nexec %q --settings %q --permission-mode acceptEdits "$@"' \
     "$(if [[ -n "${env_file}" ]]; then printf '[[ ! -r %q ]] || source %q' "${env_file}" "${env_file}"; else printf ':'; fi)" \
     "${claude_bin}" "${runtime_settings}"
   write_file "${launcher}" "${content}" 755
