@@ -78,6 +78,22 @@ sudo AI_SETUP_USER="$USER" bash ./set_claude_provider_keys.sh
 AI_SETUP_AGENT_DIR="$HOME/agent" bash ./set_claude_provider_keys.sh
 ```
 
+## 安装验收与认证恢复
+
+基础脚本执行到最终验收时，不再仅凭 CLI 版本、CCR 状态或管理密钥判断安装成功，还会：
+
+1. 从 Claude settings 读取实际静态凭据；未设置静态凭据时，执行已配置且受信任的 `apiKeyHelper`（最多等待 15 秒）。不会回退到 CCR 管理密钥；缺失凭据、助手失败或多行凭据会导致验收失败。
+2. 使用该实际凭据请求 CCR `/v1/models`，要求 HTTP 200 且模型列表非空（请求最多等待 10 秒）。
+3. 分别执行普通 `claude` 和 `codex` 的简短真实请求，各最多等待 90 秒，以退出状态判断是否成功。请求提示要求只回复 OK、不使用工具；Claude 同时显式禁用工具。
+
+**调用成本与范围：** 这两次客户端请求可能消耗上游额度；发生恢复时还会重新请求。验收检查的是两个客户端当前默认配置，不保证所有独立 profile 或模型均可用。已保留 JD 默认配置时，普通 Codex 验证的是 JD 直连，而不是强制改回 CCR。
+
+**认证恢复规则：** 当模型发现返回 401，或真实 CLI 请求失败并报告认证拒绝时，脚本最多重启 CCR 一次、等待服务恢复并重新检查 Claude 模型发现和两个 CLI。恢复后任何检查仍失败，安装验收立即失败，不会循环重启。Codex 只有默认 provider 为 `claude-code-router` 时，其认证失败才允许触发 CCR 恢复。
+
+网络错误、超时、非认证服务错误以及空模型列表不会触发认证恢复。失败提示仅报告检查类别，不输出原始响应正文、凭据或 CLI 诊断；必要时在本机检查私有日志，分享前先脱敏。
+
+此机制用于发现真实客户端不可用，并尝试刷新 CCR 运行时认证状态；它不改变安装顺序，也不意味着 CCR 内部持久化配置与认证快照不同步的深层原因已根治。
+
 ## 基础网关使用
 
 尚未安装 JD 时，普通启动使用火山默认模型：
@@ -273,6 +289,21 @@ source /mnt/d/agent/env.sh
 
 已安装 JD 且 JD token、profile 和 catalog 都有效时，基础脚本重跑会保留普通 `codex` 默认使用 JD。需要刷新 JD 模型时重新运行 JD 脚本。其他网关继续使用对应 `--profile`。
 
+### 客户端报 401 或 Invalid or expired API key
+
+即使 CCR 管理接口中存在密钥，运行时也可能拒绝客户端实际使用的凭据。不要用管理密钥测试成功来替代 Claude/Codex 的实际请求，也不要把 token 或完整错误响应贴到公共日志。
+
+使用最新基础脚本重新配置时，最终验收会执行上述检查，并在认证拒绝时尝试一次 CCR 恢复：
+
+```bash
+bash ./set_claude_provider_keys.sh --configure-only
+source /mnt/d/agent/env.sh
+```
+
+该命令会重新探测并更新基础网关配置，并非只读诊断。需要保留现有配置时，应先备份安装目录中的配置和 CCR 状态。
+
+若恢复后仍失败，检查 Claude settings 中的实际凭据或密钥助手、Codex 当前默认 provider 及其凭据来源，以及相应上游 token 的权限和有效期。Codex 直连 JD 等非 CCR 服务时，应排查该服务的认证，重启 CCR 无法修复其 token。网络或超时失败则优先检查连通性和上游状态。
+
 ### JD 模型没有更新
 
 重新运行 JD 脚本。若 `/models` 没有返回某个已知候选，脚本仍会主动探测；只有实际调用成功才会加入 JD catalog。
@@ -302,6 +333,8 @@ bash ./test/set_jd_gateway_config_test.sh
 bash -n ./set_claude_provider_keys.sh
 bash -n ./set_jd_gateway_config.sh
 ```
+
+认证验收回归覆盖静态凭据、密钥助手执行、401/服务错误/超时分类、非 CCR Codex 失败不重启，以及一次恢复后的完整重验和持续失败终止。此次更新验证通过基础回归 42 项、JD 回归 13 项；同时完成两个真实客户端请求验证。隔离回归不等同于当前生产环境的在线验收。
 
 已安装环境可额外检查：
 
