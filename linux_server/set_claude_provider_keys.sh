@@ -1454,17 +1454,98 @@ fetch_ccr_config() {
 }
 
 resolve_ccr_client_key() {
-  # Claude Code's settings may embed a static token, but CCR 3.x profile
-  # takeover rewrites the managed settings file and switches client auth to
-  # an identity token file instead.  Fall back to CCR's own APIKEY then.
-  local settings_key config_response
-  settings_key=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN // empty' "${CLAUDE_SETTINGS_FILE}" 2>/dev/null || true)
+  # Validate Claude's actual credential, never a gateway/admin fallback key.
+  local settings_key helper
+  settings_key=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN // .env.ANTHROPIC_API_KEY // empty' "${CLAUDE_SETTINGS_FILE}")
   if [[ -n "${settings_key}" ]]; then
     printf '%s\n' "${settings_key}"
     return 0
   fi
-  config_response=$(fetch_ccr_config)
-  jq -r '.value.APIKEY // empty' <<<"${config_response}"
+  helper=$(jq -r '.apiKeyHelper // empty' "${CLAUDE_SETTINGS_FILE}")
+  [[ -n "${helper}" ]] || return 1
+  # This command is already trusted/executed by Claude Code. Do not read the
+  # helper script as if its contents were a token, or expose helper diagnostics.
+  HOME="${AGENT_HOME}" timeout 15 bash -c "${helper}" </dev/null 2>/dev/null
+}
+
+probe_ccr_client_models() {
+  local gateway_url=$1 key=$2 response status
+  [[ -n "${key}" && "${key}" != *$'\n'* && "${key}" != *$'\r'* ]] || return 1
+  response=$(curl --silent --max-time 10 --write-out $'\n%{http_code}' \
+    -H "Authorization: Bearer ${key}" \
+    "${gateway_url%/}/v1/models" 2>/dev/null) || return 1
+  status=${response##*$'\n'}
+  response=${response%$'\n'*}
+  # Only authentication rejection permits recovery, not network/schema errors.
+  # Keep responses in memory: do not expose keys or persist CLI diagnostics.
+  [[ "${status}" != 401 ]] || return 2
+  [[ "${status}" == 200 ]] || return 1
+  jq -e '.data | type == "array" and length > 0' <<<"${response}" >/dev/null 2>&1
+}
+
+probe_ccr_cli() {
+  local client=$1 output provider
+  if [[ "${client}" == claude ]]; then
+    if output=$(timeout 90 claude -p 'Reply only OK. Do not use tools.' --tools '' \
+      </dev/null 2>&1); then
+      return 0
+    fi
+  else
+    # Codex resolves its real default provider/credential, including CCR takeover.
+    if output=$(timeout 90 codex exec --skip-git-repo-check --ephemeral \
+      'Reply only OK. Do not use tools.' </dev/null 2>&1); then
+      return 0
+    fi
+  fi
+  if [[ "${client}" == codex ]]; then
+    provider=$(awk '/^[[:space:]]*\[/ {exit}
+      /^[[:space:]]*model_provider[[:space:]]*=/ {print; exit}' "${CODEX_DIR}/config.toml")
+    [[ "${provider}" =~ =[[:space:]]*[\"\']claude-code-router[\"\'] ]] || return 1
+  fi
+  if grep -Eiq '(HTTP[^[:alnum:]]*401|401[^[:alnum:]]*Unauthorized|unauthorized|invalid or expired API key)' <<<"${output}"; then
+    return 2
+  fi
+  return 1
+}
+
+verify_ccr_clients() {
+  local gateway_url=$1 client key result
+  for client in claude-models claude codex; do
+    while :; do
+      result=0
+      if [[ "${client}" == claude-models ]]; then
+        key=$(resolve_ccr_client_key) ||
+          die 'Could not resolve the actual Claude credential; check settings/apiKeyHelper.'
+        probe_ccr_client_models "${gateway_url}" "${key}" || result=$?
+        key=''
+      else
+        probe_ccr_cli "${client}" || result=$?
+      fi
+      ((result != 0)) || break
+      if ((result == 2)); then
+        log 'Client authentication rejected; restarting CCR once to refresh persisted profile credentials.'
+        restart_ccr_gateway
+        wait_for_ccr_service
+        load_ccr_connection
+        # Recheck every client after recovery, including those already passed.
+        verify_ccr_clients_after_restart "${gateway_url}"
+        return
+      fi
+      die "CCR ${client} verification failed (category ${result}); credentials and response bodies omitted."
+    done
+  done
+  log 'Claude actual credential/model discovery and both CLI requests: ok'
+}
+
+verify_ccr_clients_after_restart() {
+  local gateway_url=$1 key
+  key=$(resolve_ccr_client_key) || die 'Claude credential resolution failed after CCR recovery.'
+  probe_ccr_client_models "${gateway_url}" "${key}" ||
+    die 'Claude credential/model discovery still fails after CCR recovery.'
+  key=''
+  probe_ccr_cli claude || die 'Claude request still fails after CCR recovery.'
+  probe_ccr_cli codex || die 'Codex request still fails after CCR recovery.'
+  log 'Claude actual credential/model discovery and both CLI requests: ok after recovery'
 }
 
 resolve_ccr_local_key() {
@@ -1753,7 +1834,7 @@ probe_ccr_default_model() {
   response=$(cat "${response_file}" 2>/dev/null || true)
   rm -f -- "${response_file}"
   [[ "${status}" =~ ^2[0-9][0-9]$ ]] ||
-    die "CCR could not route the default Volcano model ${model} (HTTP ${status:-none}). Response: $(head -c 500 <<<"${response:-<empty body>}")"
+    die "CCR could not route the default Volcano model ${model} (HTTP ${status:-none}); response body omitted."
   log "CCR default route verified: ${model} -> Volcano AI Gateway"
 }
 
@@ -1785,37 +1866,19 @@ verify_setup() {
 
   wait_for_ccr_service
   load_ccr_connection
-  local status state last_error gateway_url local_key models_response
+  local status state gateway_url
   status=$(ccr_rpc '{"method":"getGatewayStatus","args":[]}')
   [[ "$(jq -r '.ok' <<<"${status}")" == true ]] || die "CCR gateway status check failed."
   state=$(jq -r '.value.state // "unknown"' <<<"${status}")
-  last_error=$(jq -r '.value.lastError // empty' <<<"${status}")
-  [[ "${state}" != error ]] || die "CCR gateway is in error state: ${last_error:-unknown error}"
+  [[ "${state}" != error ]] || die 'CCR gateway is in error state; inspect its private logs.'
 
   gateway_url=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "${CLAUDE_SETTINGS_FILE}")
   [[ -n "${gateway_url}" ]] ||
     die "Claude settings ${CLAUDE_SETTINGS_FILE} has no ANTHROPIC_BASE_URL; rerun configuration."
-  local_key=$(resolve_ccr_client_key)
-  [[ -n "${local_key}" ]] ||
-    die "No CCR client key available: settings has no ANTHROPIC_AUTH_TOKEN and CCR config has no APIKEY."
+  require_command timeout
+  verify_ccr_clients "${gateway_url}"
+  log "CCR gateway verification completed; real Claude and Codex default routes: ok"
 
-  local models_http models_tmp
-  models_tmp=$(mktemp)
-  models_http=$(curl --silent --show-error --max-time 10 \
-    --output "${models_tmp}" --write-out '%{http_code}' \
-    -H "Authorization: Bearer ${local_key}" \
-    "${gateway_url}/v1/models") || true
-  models_response=$(cat "${models_tmp}" 2>/dev/null || true)
-  rm -f -- "${models_tmp}"
-  [[ "${models_http}" == "200" ]] ||
-    die "CCR gateway rejected the client key at ${gateway_url}/v1/models (HTTP ${models_http:-none}). Response: $(head -c 500 <<<"${models_response:-<empty body>}")"
-  jq -e '.data | type == "array" and length > 0' <<<"${models_response}" >/dev/null ||
-    die "CCR model discovery returned no models. Response: $(head -c 500 <<<"${models_response}")"
-
-  local default_model
-  default_model=$(select_profile_model "${VOLCANO_MODELS}" deepseek-v4.1-flash deepseek-v4-flash deepseek-v4-pro)
-  probe_ccr_default_model "${gateway_url}" "${local_key}" "${default_model}"
-  log "CCR gateway state: ${state}; model discovery and default route: ok"
 }
 
 parse_args() {

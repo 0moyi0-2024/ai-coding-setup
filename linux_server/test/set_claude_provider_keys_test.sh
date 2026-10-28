@@ -1250,7 +1250,68 @@ test_completion_hint() {
   pass "completion environment hint"
 }
 
+test_actual_client_authentication() (
+  mkdir -p "${CLAUDE_CONFIG_DIR}" "${CODEX_DIR}"
+  printf '%s\n' '{"env":{"ANTHROPIC_AUTH_TOKEN":"actual-static"}}' >"${CLAUDE_SETTINGS_FILE}"
+  assert_eq actual-static "$(resolve_ccr_client_key)" 'actual static credential'
+  printf '%s\n' '{"apiKeyHelper":"printf helper-key","env":{}}' >"${CLAUDE_SETTINGS_FILE}"
+  assert_eq helper-key "$(resolve_ccr_client_key)" 'execute helper instead of fallback'
+  printf '%s\n' '{"env":{}}' >"${CLAUDE_SETTINGS_FILE}"
+  if resolve_ccr_client_key >/dev/null; then fail 'missing client credential must fail'; fi
+  printf '%s\n' '{"apiKeyHelper":"exit 1","env":{}}' >"${CLAUDE_SETTINGS_FILE}"
+  if resolve_ccr_client_key >/dev/null; then fail 'helper failure must fail'; fi
+  curl() { printf '%s\n%s' '{"data":[{"id":"test-model"}]}' "${mock_status}"; }
+  local mock_status=200 result=0
+  probe_ccr_client_models http://127.0.0.1:3456 actual-key || fail 'valid actual key'
+  mock_status=401
+  probe_ccr_client_models http://127.0.0.1:3456 actual-key || result=$?
+  assert_eq 2 "${result}" '401 allows recovery'
+  mock_status=503; result=0
+  probe_ccr_client_models http://127.0.0.1:3456 actual-key || result=$?
+  assert_eq 1 "${result}" '503 must not trigger recovery'
+  result=0
+  probe_ccr_client_models http://127.0.0.1:3456 $'key\ninvalid' || result=$?
+  assert_eq 1 "${result}" 'reject multiline helper output'
+  timeout() { printf '%s\n' "${mock_output}"; return "${mock_exit}"; }
+  local mock_output=OK mock_exit=0
+  probe_ccr_cli claude || fail 'successful Claude request'
+  printf '%s\n' 'model_provider = "claude-code-router"' >"${CODEX_DIR}/config.toml"
+  mock_exit=1; mock_output='HTTP 401 Unauthorized'; result=0
+  probe_ccr_cli codex || result=$?
+  assert_eq 2 "${result}" 'Codex CCR auth failure allows recovery'
+  printf '%s\n' 'model_provider = "jd"' >"${CODEX_DIR}/config.toml"
+  result=0; probe_ccr_cli codex || result=$?
+  assert_eq 1 "${result}" 'non-CCR auth failure must not restart CCR'
+  mock_exit=124; mock_output='request timed out'; result=0
+  probe_ccr_cli claude || result=$?
+  assert_eq 1 "${result}" 'timeout must not trigger recovery'
+)
+
+test_client_auth_recovery() (
+  local restarts=0 checks=0 mode=success
+  resolve_ccr_client_key() { printf 'actual-key'; }
+  probe_ccr_client_models() { checks=$((checks + 1)); if ((restarts == 0)) && [[ "${mode}" != success ]]; then return 2; fi; }
+  probe_ccr_cli() { [[ "${mode}" != persistent ]]; }
+  restart_ccr_gateway() { restarts=$((restarts + 1)); }
+  wait_for_ccr_service() { :; }
+  load_ccr_connection() { :; }
+  verify_ccr_clients http://127.0.0.1:3456 >/dev/null
+  assert_eq 0 "${restarts}" 'healthy service must not restart'
+  mode=recover
+  verify_ccr_clients http://127.0.0.1:3456 >/dev/null
+  assert_eq 1 "${restarts}" 'auth failure recovered with one restart'
+  assert_eq 3 "${checks}" 'model discovery repeated after recovery'
+  mode=persistent; restarts=0
+  if (verify_ccr_clients http://127.0.0.1:3456 >/dev/null 2>&1); then
+    fail 'persistent client failure must fail verification'
+  fi
+)
+
 require_command jq
+test_actual_client_authentication
+pass 'actual client authentication, helper and failure classification'
+test_client_auth_recovery
+pass 'bounded authentication recovery and full revalidation'
 test_agent_layout
 test_codex_resume_uses_original_profile
 test_setup_user_ownership
